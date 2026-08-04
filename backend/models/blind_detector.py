@@ -258,6 +258,36 @@ def _edge_score(img: np.ndarray) -> float:
     return float(np.clip(0.5 * uniformity + 0.5 * channel_corr, 0, 1))
 
 
+# ─── signal 6: error level analysis ────────────────────────────────────────────
+
+def _ela_score(img: np.ndarray) -> float:
+    """
+    Error Level Analysis: resave at a fixed JPEG quality and diff against the
+    original. A real photo degrades ~uniformly under recompression. A region
+    spliced in from elsewhere (different original quality/generation) shows a
+    different recompression error than its surroundings — so high *block-wise
+    irregularity* in the error map, not the raw error level, is the tamper signal.
+    """
+    pil_img = Image.fromarray(img)
+    buf = io.BytesIO()
+    pil_img.save(buf, format="JPEG", quality=95)
+    buf.seek(0)
+    resaved = np.array(Image.open(buf).convert("RGB")).astype(np.float32)
+
+    diff_gray = np.abs(img.astype(np.float32) - resaved).mean(axis=2)
+
+    bh, bw = max(diff_gray.shape[0] // 8, 1), max(diff_gray.shape[1] // 8, 1)
+    blocks = [
+        diff_gray[i:i + bh, j:j + bw].mean()
+        for i in range(0, diff_gray.shape[0] - bh, bh)
+        for j in range(0, diff_gray.shape[1] - bw, bw)
+    ]
+    block_arr = np.array(blocks) if blocks else np.array([diff_gray.mean()])
+    irregularity = block_arr.std() / (block_arr.mean() + 1e-8)
+
+    return float(np.clip(irregularity / 1.5, 0, 1))
+
+
 # ─── heatmap ───────────────────────────────────────────────────────────────────
 
 def _generate_gradcam_heatmap(img: np.ndarray, cam: np.ndarray) -> str:
@@ -316,21 +346,22 @@ def _cnn_predict(img: np.ndarray) -> tuple[str, dict[str, float], "torch.Tensor"
 # ─── heuristic 3-class prediction ──────────────────────────────────────────────
 
 def _heuristic_predict(
-    spectral: float, gan: float, noise: float, texture: float, edge: float
+    spectral: float, gan: float, noise: float, texture: float, edge: float, ela: float
 ) -> tuple[str, dict[str, float], float]:
     """
     Returns (prediction, class_probabilities, composite_fake_score).
 
     Heuristic logic:
       AI_GENERATED: strong GAN fingerprint + spectral deviation
-      EDITED:       noise inconsistency + texture anomaly, but weaker GAN signal
+      EDITED:       noise/ELA inconsistency + texture anomaly, but weaker GAN signal
     """
     composite = (
-        0.28 * spectral
-        + 0.22 * gan
-        + 0.25 * noise
-        + 0.15 * texture
-        + 0.10 * edge
+        0.22 * spectral
+        + 0.18 * gan
+        + 0.18 * noise
+        + 0.12 * texture
+        + 0.08 * edge
+        + 0.22 * ela
     )
 
     threshold = 0.45
@@ -345,9 +376,9 @@ def _heuristic_predict(
 
     # Fake — decide subtype
     # AI_GENERATED: GAN peaks + spectral are the dominant signal
-    # EDITED: noise inconsistency / texture boundary effects dominate
+    # EDITED: noise/ELA inconsistency / texture boundary effects dominate
     ai_score   = 0.50 * gan + 0.35 * spectral + 0.15 * edge
-    edit_score = 0.45 * noise + 0.35 * texture + 0.20 * spectral
+    edit_score = 0.35 * noise + 0.25 * texture + 0.15 * spectral + 0.25 * ela
 
     total = ai_score + edit_score + 1e-8
     ai_frac   = ai_score / total
@@ -372,7 +403,7 @@ def _heuristic_predict(
 
 # ─── signal label → dominant forgery type ──────────────────────────────────────
 
-def _dominant_signal(spectral, gan, noise, texture, edge, prediction) -> str:
+def _dominant_signal(spectral, gan, noise, texture, edge, ela, prediction) -> str:
     if prediction == "REAL":
         return "none"
     signal_map = {
@@ -381,13 +412,14 @@ def _dominant_signal(spectral, gan, noise, texture, edge, prediction) -> str:
         "noise_inconsistency": noise,
         "texture_boundary":   texture,
         "edge_sharpness":     edge,
+        "compression_inconsistency": ela,
     }
     return max(signal_map, key=signal_map.get)
 
 
 # ─── main entry ────────────────────────────────────────────────────────────────
 
-def analyze(image_data: bytes) -> dict:
+def analyze(image_data: bytes, confidence_threshold: float = 0.5, enable_gradcam: bool = True) -> dict:
     img = _load_image(image_data)
 
     spectral  = _spectral_score(img)
@@ -395,8 +427,9 @@ def analyze(image_data: bytes) -> dict:
     noise     = _noise_residual_score(img)
     texture   = _texture_score(img)
     edge      = _edge_score(img)
+    ela       = _ela_score(img)
 
-    heuristic_pred, heuristic_probs, composite = _heuristic_predict(spectral, gan, noise, texture, edge)
+    heuristic_pred, heuristic_probs, composite = _heuristic_predict(spectral, gan, noise, texture, edge, ela)
 
     if _MODEL is not None:
         cnn_pred, cnn_probs, tensor, _ = _cnn_predict(img)
@@ -406,7 +439,7 @@ def analyze(image_data: bytes) -> dict:
         signal_agreement = cnn_pred == heuristic_pred
         is_fake = prediction != "REAL"
         heatmap_url = None
-        if is_fake:
+        if is_fake and enable_gradcam:
             cam = _GRADCAM(tensor, CLASSES.index(prediction))
             heatmap_url = _generate_gradcam_heatmap(img, cam)
     else:
@@ -414,13 +447,14 @@ def analyze(image_data: bytes) -> dict:
         confidence = class_probs[prediction]
         signal_agreement = None
         is_fake = prediction != "REAL"
-        heatmap_url = _generate_heatmap(img) if is_fake else None
+        heatmap_url = _generate_heatmap(img) if (is_fake and enable_gradcam) else None
 
-    forgery_type = _dominant_signal(spectral, gan, noise, texture, edge, prediction)
+    forgery_type = _dominant_signal(spectral, gan, noise, texture, edge, ela, prediction)
 
     return {
         "prediction": prediction,
         "confidence": round(confidence, 3),
+        "meets_threshold": confidence >= confidence_threshold,
         "forgery_type": forgery_type,
         "heatmap_url": heatmap_url,
         "class_probabilities": class_probs,
@@ -431,6 +465,7 @@ def analyze(image_data: bytes) -> dict:
             "gan_score":            round(gan, 3),
             "noise_score":          round(noise, 3),
             "texture_score":        round(texture, 3),
+            "ela_score":            round(ela, 3),
             "heuristic_composite":  round(composite, 3),
         },
     }

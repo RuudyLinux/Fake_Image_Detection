@@ -3,6 +3,7 @@ export type PredictionClass = 'REAL' | 'AI_GENERATED' | 'EDITED';
 export interface BlindDetectionResult {
   prediction: PredictionClass;
   confidence: number;
+  meets_threshold: boolean;
   forgery_type: string;
   heatmap_url: string | null;
   class_probabilities: {
@@ -17,6 +18,7 @@ export interface BlindDetectionResult {
     gan_score:           number;
     noise_score:         number;
     texture_score:       number;
+    ela_score:           number;
     heuristic_composite: number;
   };
 }
@@ -27,6 +29,8 @@ export interface ComparativeResult {
   diff_map_url: string | null;
   highlighted_url: string | null;
   regions_count: number;
+  phash_distance: number;
+  dhash_distance: number;
 }
 
 export type DetectionStatus = 'idle' | 'uploading' | 'analyzing' | 'done' | 'error';

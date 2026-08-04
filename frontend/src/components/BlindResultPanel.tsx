@@ -3,7 +3,7 @@ import type { LucideIcon } from 'lucide-react';
 import { CheckCircle, Eye, Cpu, Scissors, FileDown, Loader2 } from 'lucide-react';
 import type { BlindDetectionResult, PredictionClass } from '../types';
 import ConfidenceBar from './ConfidenceBar';
-import { downloadBlindReport } from '../api/detection';
+import { downloadBlindReport, type BlindDetectionOptions } from '../api/detection';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -13,6 +13,7 @@ const FORGERY_LABELS: Record<string, string> = {
   noise_inconsistency:  'Noise Inconsistency',
   texture_boundary:     'Texture Boundary Anomaly',
   edge_sharpness:       'Edge/Gradient Anomaly',
+  compression_inconsistency: 'Compression (ELA) Anomaly',
   none:                 'None',
 };
 
@@ -53,9 +54,10 @@ const CLASS_CONFIG: Record<PredictionClass, {
 interface Props {
   result: BlindDetectionResult;
   imageFile: File;
+  reportOptions?: BlindDetectionOptions;
 }
 
-export default function BlindResultPanel({ result, imageFile }: Props) {
+export default function BlindResultPanel({ result, imageFile, reportOptions }: Props) {
   const cfg = CLASS_CONFIG[result.prediction];
   const Icon = cfg.icon;
   const previewUrl = URL.createObjectURL(imageFile);
@@ -66,7 +68,7 @@ export default function BlindResultPanel({ result, imageFile }: Props) {
   const handleDownloadReport = async () => {
     setDownloading(true);
     try {
-      const blob = await downloadBlindReport(imageFile);
+      const blob = await downloadBlindReport(imageFile, reportOptions);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -89,6 +91,11 @@ export default function BlindResultPanel({ result, imageFile }: Props) {
           <p className="text-sm text-slate-400 uppercase tracking-widest font-medium">Verdict</p>
           <p className={`text-3xl font-bold ${cfg.color}`}>{cfg.label}</p>
           <p className="text-slate-400 text-sm mt-0.5">{cfg.desc}</p>
+          {!result.meets_threshold && (
+            <p className="text-yellow-400 text-xs font-semibold mt-1">
+              ⚠ Below your confidence threshold — verify manually.
+            </p>
+          )}
           <p className="text-slate-400 text-xs mt-1">
             Confidence:{' '}
             <span className="text-slate-200 font-semibold">
@@ -168,6 +175,11 @@ export default function BlindResultPanel({ result, imageFile }: Props) {
           value={result.analysis.edge_score}
           color="green"
         />
+        <ConfidenceBar
+          label="Error Level Analysis (ELA)"
+          value={result.analysis.ela_score}
+          color="blue"
+        />
         {result.signal_agreement !== null && (
           <p className="text-xs text-slate-500 pt-1">
             CNN and heuristic signals{' '}
@@ -201,7 +213,11 @@ export default function BlindResultPanel({ result, imageFile }: Props) {
           </div>
         ) : (
           <div className="card flex items-center justify-center text-slate-600 text-sm h-full min-h-32 border-dashed">
-            {isFake ? 'Heatmap generation failed' : 'No heatmap (image classified as real)'}
+            {!isFake
+              ? 'No heatmap (image classified as real)'
+              : reportOptions?.enableGradcam === false
+                ? 'Grad-CAM disabled in settings'
+                : 'Heatmap generation failed'}
           </div>
         )}
       </div>

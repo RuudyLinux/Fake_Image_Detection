@@ -7,6 +7,7 @@ import uuid
 import numpy as np
 from PIL import Image
 import cv2
+import imagehash
 from skimage.metrics import structural_similarity as ssim
 from pathlib import Path
 
@@ -35,6 +36,19 @@ def _save_image(img: np.ndarray, prefix: str) -> str:
     return f"/static/{filename}"
 
 
+def _hash_distances(original_data: bytes, suspected_data: bytes) -> tuple[int, int]:
+    """
+    Perceptual hash distance (Hamming, 0-64): near-0 means structurally identical
+    even after resize/recompression; large jumps flag content-level changes that
+    SSIM (pixel-aligned) can miss on shifted/rescaled/recompressed images.
+    """
+    orig_pil = Image.open(io.BytesIO(original_data)).convert("RGB")
+    susp_pil = Image.open(io.BytesIO(suspected_data)).convert("RGB")
+    phash_dist = imagehash.phash(orig_pil) - imagehash.phash(susp_pil)
+    dhash_dist = imagehash.dhash(orig_pil) - imagehash.dhash(susp_pil)
+    return int(phash_dist), int(dhash_dist)
+
+
 def compare(original_data: bytes, suspected_data: bytes) -> dict:
     orig = _load_resize(original_data)
     h, w = orig.shape[:2]
@@ -46,6 +60,8 @@ def compare(original_data: bytes, suspected_data: bytes) -> dict:
     # SSIM
     score, ssim_map = ssim(orig_gray, susp_gray, full=True)
     score = float(score)
+
+    phash_distance, dhash_distance = _hash_distances(original_data, suspected_data)
 
     # Pixel diff map
     diff = cv2.absdiff(orig, susp)
@@ -68,7 +84,7 @@ def compare(original_data: bytes, suspected_data: bytes) -> dict:
         cv2.rectangle(highlighted, (x, y), (x + rw, y + rh), (255, 80, 80), 1)
 
     highlighted_url = _save_image(highlighted, "highlighted") if significant else None
-    is_manipulated = score < 0.95 or len(significant) > 0
+    is_manipulated = score < 0.95 or len(significant) > 0 or phash_distance > 10
 
     return {
         "similarity_score": round(score, 4),
@@ -76,4 +92,6 @@ def compare(original_data: bytes, suspected_data: bytes) -> dict:
         "diff_map_url": diff_map_url,
         "highlighted_url": highlighted_url,
         "regions_count": len(significant),
+        "phash_distance": phash_distance,
+        "dhash_distance": dhash_distance,
     }

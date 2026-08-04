@@ -2,12 +2,12 @@ import io
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, Query
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Query
 from fastapi.responses import Response
 from PIL import Image
 
 from models import blind_detector, comparative_detector
-from reports.pdf_report import generate_blind_report
+from reports.pdf_report import generate_blind_report, generate_comparative_report
 import db
 
 router = APIRouter(prefix="/detect", tags=["detection"])
@@ -34,13 +34,17 @@ def _save_thumbnail(data: bytes) -> str:
 
 
 @router.post("/blind")
-async def detect_blind(image: UploadFile = File(...)):
+async def detect_blind(
+    image: UploadFile = File(...),
+    confidence_threshold: float = Form(0.5),
+    enable_gradcam: bool = Form(True),
+):
     _validate_image(image)
     data = await image.read()
     if len(data) > MAX_SIZE:
         raise HTTPException(413, "Image exceeds 20 MB limit")
     try:
-        result = blind_detector.analyze(data)
+        result = blind_detector.analyze(data, confidence_threshold, enable_gradcam)
         thumbnail_url = _save_thumbnail(data)
         db.insert_detection("blind", result, thumbnail_url)
     except Exception as exc:
@@ -49,13 +53,17 @@ async def detect_blind(image: UploadFile = File(...)):
 
 
 @router.post("/blind/report")
-async def detect_blind_report(image: UploadFile = File(...)):
+async def detect_blind_report(
+    image: UploadFile = File(...),
+    confidence_threshold: float = Form(0.5),
+    enable_gradcam: bool = Form(True),
+):
     _validate_image(image)
     data = await image.read()
     if len(data) > MAX_SIZE:
         raise HTTPException(413, "Image exceeds 20 MB limit")
     try:
-        result = blind_detector.analyze(data)
+        result = blind_detector.analyze(data, confidence_threshold, enable_gradcam)
         pdf_bytes = generate_blind_report(data, result)
     except Exception as exc:
         raise HTTPException(500, f"Report generation error: {exc}") from exc
@@ -90,6 +98,29 @@ async def detect_comparative(
     except Exception as exc:
         raise HTTPException(500, f"Comparison error: {exc}") from exc
     return result
+
+
+@router.post("/compare/report")
+async def detect_comparative_report(
+    original: UploadFile = File(...),
+    suspected: UploadFile = File(...),
+):
+    _validate_image(original)
+    _validate_image(suspected)
+    orig_data = await original.read()
+    susp_data = await suspected.read()
+    if len(orig_data) > MAX_SIZE or len(susp_data) > MAX_SIZE:
+        raise HTTPException(413, "Image exceeds 20 MB limit")
+    try:
+        result = comparative_detector.compare(orig_data, susp_data)
+        pdf_bytes = generate_comparative_report(orig_data, susp_data, result)
+    except Exception as exc:
+        raise HTTPException(500, f"Report generation error: {exc}") from exc
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "attachment; filename=fakeguard_comparative_report.pdf"},
+    )
 
 
 @router.get("/history")

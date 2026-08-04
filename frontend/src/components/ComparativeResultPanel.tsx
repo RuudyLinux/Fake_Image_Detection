@@ -1,6 +1,8 @@
-import { GitCompare, Map } from 'lucide-react';
+import { useState } from 'react';
+import { GitCompare, Map, FileDown, Loader2 } from 'lucide-react';
 import type { ComparativeResult } from '../types';
 import ConfidenceBar from './ConfidenceBar';
+import { downloadComparativeReport } from '../api/detection';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -14,6 +16,22 @@ export default function ComparativeResultPanel({ result, original, suspected }: 
   const simPct = Math.round(result.similarity_score * 100);
   const origUrl = URL.createObjectURL(original);
   const suspUrl = URL.createObjectURL(suspected);
+  const [downloading, setDownloading] = useState(false);
+
+  const handleDownloadReport = async () => {
+    setDownloading(true);
+    try {
+      const blob = await downloadComparativeReport(original, suspected);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'fakeguard_comparative_report.pdf';
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
@@ -45,15 +63,32 @@ export default function ComparativeResultPanel({ result, original, suspected }: 
             )}
           </p>
         </div>
+        <button
+          onClick={handleDownloadReport}
+          disabled={downloading}
+          className="btn-secondary flex-shrink-0 text-sm"
+        >
+          {downloading ? (
+            <Loader2 size={16} className="animate-spin" />
+          ) : (
+            <FileDown size={16} />
+          )}
+          PDF Report
+        </button>
       </div>
 
       {/* Similarity bar */}
-      <div className="card">
+      <div className="card space-y-3">
         <ConfidenceBar
           label="Structural Similarity (SSIM)"
           value={result.similarity_score}
           color={result.similarity_score >= 0.9 ? 'green' : result.similarity_score >= 0.7 ? 'yellow' : 'red'}
         />
+        <p className="text-xs text-slate-500">
+          Perceptual hash distance: <span className="text-slate-300 font-semibold">{result.phash_distance}</span> / 64
+          {' '}· Difference hash distance: <span className="text-slate-300 font-semibold">{result.dhash_distance}</span> / 64
+          {' '}<span className="text-slate-600">(0 = identical, resilient to resize/recompression)</span>
+        </p>
       </div>
 
       {/* Image comparison grid */}

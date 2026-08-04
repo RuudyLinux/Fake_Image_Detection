@@ -6,18 +6,35 @@ const api = axios.create({
   timeout: 60000,
 });
 
-export async function detectBlind(file: File): Promise<BlindDetectionResult> {
+export interface BlindDetectionOptions {
+  confidenceThreshold: number; // 0-1
+  enableGradcam: boolean;
+}
+
+const DEFAULT_OPTIONS: BlindDetectionOptions = { confidenceThreshold: 0.5, enableGradcam: true };
+
+export async function detectBlind(
+  file: File,
+  options: BlindDetectionOptions = DEFAULT_OPTIONS
+): Promise<BlindDetectionResult> {
   const form = new FormData();
   form.append('image', file);
+  form.append('confidence_threshold', String(options.confidenceThreshold));
+  form.append('enable_gradcam', String(options.enableGradcam));
   const { data } = await api.post<BlindDetectionResult>('/detect/blind', form, {
     headers: { 'Content-Type': 'multipart/form-data' },
   });
   return data;
 }
 
-export async function downloadBlindReport(file: File): Promise<Blob> {
+export async function downloadBlindReport(
+  file: File,
+  options: BlindDetectionOptions = DEFAULT_OPTIONS
+): Promise<Blob> {
   const form = new FormData();
   form.append('image', file);
+  form.append('confidence_threshold', String(options.confidenceThreshold));
+  form.append('enable_gradcam', String(options.enableGradcam));
   const { data } = await api.post('/detect/blind/report', form, {
     headers: { 'Content-Type': 'multipart/form-data' },
     responseType: 'blob',
@@ -43,6 +60,17 @@ export async function detectComparative(
   form.append('suspected', suspected);
   const { data } = await api.post<ComparativeResult>('/detect/compare', form, {
     headers: { 'Content-Type': 'multipart/form-data' },
+  });
+  return data;
+}
+
+export async function downloadComparativeReport(original: File, suspected: File): Promise<Blob> {
+  const form = new FormData();
+  form.append('original', original);
+  form.append('suspected', suspected);
+  const { data } = await api.post('/detect/compare/report', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    responseType: 'blob',
   });
   return data;
 }

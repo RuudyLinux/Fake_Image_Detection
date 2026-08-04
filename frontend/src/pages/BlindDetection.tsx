@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Search, Loader2, AlertCircle } from 'lucide-react';
+import { Search, Loader2, AlertCircle, Settings2 } from 'lucide-react';
 import UploadZone from '../components/UploadZone';
 import BlindResultPanel from '../components/BlindResultPanel';
 import { detectBlind } from '../api/detection';
@@ -10,6 +10,8 @@ export default function BlindDetection() {
   const [status, setStatus] = useState<DetectionStatus>('idle');
   const [result, setResult] = useState<BlindDetectionResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [confidenceThreshold, setConfidenceThreshold] = useState(0.5);
+  const [enableGradcam, setEnableGradcam] = useState(true);
 
   const handleAnalyze = async () => {
     if (!file) return;
@@ -17,7 +19,7 @@ export default function BlindDetection() {
     setError(null);
     setResult(null);
     try {
-      const data = await detectBlind(file);
+      const data = await detectBlind(file, { confidenceThreshold, enableGradcam });
       setResult(data);
       setStatus('done');
     } catch (err: unknown) {
@@ -77,6 +79,44 @@ export default function BlindDetection() {
               )}
             </div>
 
+            {/* Settings */}
+            <div className="card space-y-4">
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                <Settings2 size={12} /> Settings
+              </p>
+              <div>
+                <div className="flex items-center justify-between text-sm mb-1.5">
+                  <label htmlFor="confidence-threshold" className="text-slate-300">
+                    Confidence threshold
+                  </label>
+                  <span className="text-slate-200 font-semibold">
+                    {Math.round(confidenceThreshold * 100)}%
+                  </span>
+                </div>
+                <input
+                  id="confidence-threshold"
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={Math.round(confidenceThreshold * 100)}
+                  onChange={(e) => setConfidenceThreshold(Number(e.target.value) / 100)}
+                  className="w-full accent-purple-500"
+                />
+                <p className="text-xs text-slate-600 mt-1">
+                  Verdicts below this confidence are flagged as low-confidence.
+                </p>
+              </div>
+              <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={enableGradcam}
+                  onChange={(e) => setEnableGradcam(e.target.checked)}
+                  className="accent-purple-500"
+                />
+                Enable Grad-CAM heatmap
+              </label>
+            </div>
+
             {/* Info card */}
             <div className="card space-y-3">
               <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Models Used</p>
@@ -131,7 +171,11 @@ export default function BlindDetection() {
             )}
 
             {status === 'done' && result && file && (
-              <BlindResultPanel result={result} imageFile={file} />
+              <BlindResultPanel
+                result={result}
+                imageFile={file}
+                reportOptions={{ confidenceThreshold, enableGradcam }}
+              />
             )}
           </div>
         </div>

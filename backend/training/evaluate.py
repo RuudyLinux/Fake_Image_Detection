@@ -7,16 +7,47 @@ Usage:
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 import torch
 import numpy as np
 from torch.utils.data import DataLoader
 from torch.cuda.amp import autocast
+from sklearn.metrics import roc_auc_score
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from models.cnn_model import FakeImageDetector, CLASSES, NUM_CLASSES
 from training.dataset import FakeImageDataset
+
+
+def benchmark_latency(model, val_ds, device, n: int = 100) -> float:
+    """Median single-image inference latency in seconds (batch size 1, post-warmup)."""
+    loader = DataLoader(val_ds, batch_size=1, shuffle=True, num_workers=0)
+    it = iter(loader)
+
+    for _ in range(10):
+        imgs, _ = next(it)
+        imgs = imgs.to(device)
+        with torch.no_grad(), autocast():
+            model(imgs)
+    if device.type == "cuda":
+        torch.cuda.synchronize()
+
+    times = []
+    for _ in range(n):
+        imgs, _ = next(it)
+        imgs = imgs.to(device)
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        t0 = time.perf_counter()
+        with torch.no_grad(), autocast():
+            model(imgs)
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        times.append(time.perf_counter() - t0)
+
+    return float(np.median(times))
 
 
 def evaluate(checkpoint_path: str, data_dir: str, batch_size: int = 32, workers: int = 4):
@@ -74,6 +105,11 @@ def evaluate(checkpoint_path: str, data_dir: str, batch_size: int = 32, workers:
     macro_prec = float(np.mean([v["precision"] for v in per_class_metrics.values()]))
     macro_rec  = float(np.mean([v["recall"]    for v in per_class_metrics.values()]))
 
+    labels_onehot = np.eye(NUM_CLASSES)[all_labels]
+    macro_auc = float(roc_auc_score(labels_onehot, all_probs, average="macro", multi_class="ovr"))
+
+    latency_s = benchmark_latency(model, val_ds, device)
+
     print("\n" + "=" * 60)
     print("EVALUATION RESULTS — 3-Class Fake Image Detection")
     print("=" * 60)
@@ -81,6 +117,8 @@ def evaluate(checkpoint_path: str, data_dir: str, batch_size: int = 32, workers:
     print(f"Macro F1      : {macro_f1:.4f}")
     print(f"Macro Precision: {macro_prec:.4f}")
     print(f"Macro Recall  : {macro_rec:.4f}")
+    print(f"Macro AUC-ROC : {macro_auc:.4f}")
+    print(f"Inference latency (median, batch=1, {device.type}): {latency_s*1000:.1f} ms")
 
     print("\nPer-Class Metrics:")
     header = f"{'Class':>15}  {'Precision':>10}  {'Recall':>8}  {'F1':>8}  {'Support':>8}"
@@ -104,6 +142,8 @@ def evaluate(checkpoint_path: str, data_dir: str, batch_size: int = 32, workers:
         "macro_f1": macro_f1,
         "macro_precision": macro_prec,
         "macro_recall": macro_rec,
+        "macro_auc_roc": macro_auc,
+        "latency_ms": latency_s * 1000,
         "per_class": per_class_metrics,
         "confusion_matrix": conf_matrix.tolist(),
     }

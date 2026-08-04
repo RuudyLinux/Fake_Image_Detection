@@ -117,3 +117,83 @@ def generate_blind_report(image_bytes: bytes, result: dict) -> bytes:
 
     doc.build(story)
     return buf.getvalue()
+
+
+def generate_comparative_report(original_bytes: bytes, suspected_bytes: bytes, result: dict) -> bytes:
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=A4,
+        topMargin=20 * mm, bottomMargin=20 * mm, leftMargin=20 * mm, rightMargin=20 * mm,
+    )
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        "TitleFG", parent=styles["Title"], textColor=colors.HexColor("#7c3aed"),
+    )
+    is_manipulated = result["is_manipulated"]
+    verdict_color = colors.HexColor("#ef4444") if is_manipulated else colors.HexColor("#22c55e")
+    verdict_style = ParagraphStyle(
+        "Verdict", parent=styles["Heading1"], textColor=verdict_color, fontSize=22,
+    )
+
+    story = []
+    story.append(Paragraph("FakeGuard AI — Comparative Detection Report", title_style))
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    story.append(Paragraph(f"Generated {timestamp}", styles["Normal"]))
+    story.append(Spacer(1, 10 * mm))
+
+    verdict_label = "MANIPULATED" if is_manipulated else "AUTHENTIC"
+    story.append(Paragraph(f"Verdict: {verdict_label}", verdict_style))
+    story.append(Paragraph(
+        f"Similarity (SSIM): {result['similarity_score'] * 100:.1f}%  ·  "
+        f"Altered regions detected: {result['regions_count']}",
+        styles["Normal"],
+    ))
+    story.append(Spacer(1, 8 * mm))
+
+    metric_rows = [
+        ["Metric", "Value"],
+        ["Structural Similarity (SSIM)", f"{result['similarity_score'] * 100:.1f}%"],
+        ["Perceptual hash distance (pHash)", f"{result['phash_distance']} / 64"],
+        ["Difference hash distance (dHash)", f"{result['dhash_distance']} / 64"],
+        ["Altered regions", str(result["regions_count"])],
+    ]
+    metric_table = Table(metric_rows, colWidths=[100 * mm, 40 * mm])
+    metric_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1e1b4b")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+        ("FONTSIZE", (0, 0), (-1, -1), 10),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.whitesmoke, colors.white]),
+    ]))
+    story.append(Paragraph("Comparison Metrics", styles["Heading3"]))
+    story.append(metric_table)
+    story.append(Spacer(1, 8 * mm))
+
+    img_row = [
+        RLImage(io.BytesIO(original_bytes), width=38 * mm, height=38 * mm, kind="proportional"),
+        RLImage(io.BytesIO(suspected_bytes), width=38 * mm, height=38 * mm, kind="proportional"),
+    ]
+    labels = ["Original Image", "Suspected Image"]
+
+    diff_url = result.get("diff_map_url")
+    if diff_url:
+        diff_path = STATIC_DIR / Path(diff_url).name
+        if diff_path.exists():
+            img_row.append(RLImage(str(diff_path), width=38 * mm, height=38 * mm, kind="proportional"))
+            labels.append("Difference Map")
+
+    highlighted_url = result.get("highlighted_url")
+    if highlighted_url:
+        highlighted_path = STATIC_DIR / Path(highlighted_url).name
+        if highlighted_path.exists():
+            img_row.append(RLImage(str(highlighted_path), width=38 * mm, height=38 * mm, kind="proportional"))
+            labels.append("Highlighted Regions")
+
+    col_width = min(40 * mm, 170 * mm / len(img_row))
+    story.append(KeepTogether([
+        Paragraph("Visual Evidence", styles["Heading3"]),
+        Table([img_row, labels], colWidths=[col_width] * len(img_row)),
+    ]))
+
+    doc.build(story)
+    return buf.getvalue()
