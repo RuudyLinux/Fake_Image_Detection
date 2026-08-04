@@ -1,20 +1,29 @@
 """
 Test-time augmentation for the forensic detector.
 
-IMPORTANT domain constraint: most standard TTA recipes are wrong here.
+IMPORTANT — two constraints stack here, and missing either one breaks TTA.
 
-This model decides using *forensic* evidence — spectral decay, GAN upsampling
-periodicity, sensor noise residual, compression error. Any augmentation that
-RESAMPLES the pixel grid (scaling, rotation by non-multiples of 90 deg,
-perspective warp) runs its own interpolation filter over the image, which
-smooths high-frequency content and rewrites exactly the artifacts being
-measured. Averaging over resampled views does not reduce variance — it
-averages in evidence about the resampler instead of the image.
+1. RESAMPLE-FREE. This model decides using *forensic* evidence — spectral
+   decay, GAN upsampling periodicity, sensor noise residual, compression
+   error. Any augmentation that RESAMPLES the pixel grid (scaling, rotation
+   by non-multiples of 90 deg, perspective warp) runs its own interpolation
+   filter over the image, smoothing high-frequency content and rewriting
+   exactly the artifacts being measured.
 
-So TTA here is restricted to transforms that permute pixels without
-interpolating: horizontal flip, vertical flip, and 180 deg rotation. These
-preserve the magnitude spectrum and the noise-residual statistics while still
-giving the network genuinely different inputs.
+2. IN-DISTRIBUTION FOR THE CLASSIFIER. Resample-free is necessary but not
+   sufficient: a view the network was never trained to be invariant to is
+   simply a novel, out-of-distribution input, whatever its forensic
+   properties. Measured directly — see training/evaluate_ensemble.py —
+   adding vflip and 180-degree rotation to the TTA set dropped forced
+   accuracy from 99.78% to 90.22%, because training/dataset.py only ever
+   applies RandomHorizontalFlip (never vertical flip or 180-degree rotation).
+   The network has learned invariance to a horizontal mirror and nothing
+   else; showing it an upside-down face is not a robustness test, it is a
+   different distribution, and averaging its confidently-wrong output into
+   the ensemble actively hurts.
+
+So TTA here is restricted to the one pixel-permuting, resample-free view the
+model was actually trained to be invariant to: horizontal flip.
 """
 
 import torch
@@ -28,16 +37,9 @@ def _hflip(x: torch.Tensor) -> torch.Tensor:
     return torch.flip(x, dims=[-1])
 
 
-def _vflip(x: torch.Tensor) -> torch.Tensor:
-    return torch.flip(x, dims=[-2])
-
-
-def _rot180(x: torch.Tensor) -> torch.Tensor:
-    return torch.flip(x, dims=[-2, -1])
-
-
-# Resample-free only — see module docstring.
-TTA_TRANSFORMS = [_identity, _hflip, _vflip, _rot180]
+# Matches training augmentation exactly — see module docstring before adding
+# vflip/rot180 back. They were tried and measured harmful.
+TTA_TRANSFORMS = [_identity, _hflip]
 
 
 @torch.no_grad()

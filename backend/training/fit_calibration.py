@@ -155,7 +155,12 @@ def main():
     print(f"Fitted temperature : {temperature:.4f}"
           f"   ({'sharpening — model was under-confident' if temperature < 1 else 'softening — model was over-confident'})")
     print(f"ECE  before -> after : {ece_before:.4f} -> {ece_after:.4f}   ({ece_before - ece_after:+.4f})")
-    print(f"Acc  before -> after : {acc_before:.4%} -> {acc_after:.4%}   (temperature cannot change argmax)")
+    # Note: a single softmax's argmax is temperature-invariant, but this is a
+    # weighted SUM of two members' softmaxes. Scaling each member's softmax
+    # differently can shift which class wins the sum, so — unlike single-model
+    # calibration — accuracy here is not guaranteed to be exactly unchanged.
+    print(f"Acc  before -> after : {acc_before:.4%} -> {acc_after:.4%}   "
+          f"(fused-ensemble argmax can shift slightly with T; a single model's cannot)")
     print(f"Mean confidence      : {before.max(axis=1).mean():.2%} -> {after.max(axis=1).mean():.2%}")
     print("=" * 68)
 
