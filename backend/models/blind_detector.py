@@ -29,13 +29,16 @@ from PIL import Image
 import cv2
 from pathlib import Path
 
+from models.fusion import fuse
+
 # ─── load trained CNN model (optional) ─────────────────────────────────────────
 
 _MODEL = None
 _TRANSFORM = None
+_GRADCAM = None
 
 def _try_load_cnn():
-    global _MODEL, _TRANSFORM
+    global _MODEL, _TRANSFORM, _GRADCAM
     checkpoint = Path(__file__).parent.parent / "checkpoints" / "efficientnet_b4_fake.pth"
     if not checkpoint.exists():
         return
@@ -45,6 +48,7 @@ def _try_load_cnn():
         import torchvision.transforms as T
         sys.path.insert(0, str(Path(__file__).parent.parent))
         from models.cnn_model import FakeImageDetector
+        from models.gradcam import build_gradcam
 
         state = torch.load(checkpoint, map_location="cpu")
         model = FakeImageDetector(pretrained=False)
@@ -52,6 +56,7 @@ def _try_load_cnn():
         model.eval()
 
         _MODEL = model
+        _GRADCAM = build_gradcam(model)
         _TRANSFORM = T.Compose([
             T.Resize((380, 380)),
             T.ToTensor(),
@@ -255,6 +260,23 @@ def _edge_score(img: np.ndarray) -> float:
 
 # ─── heatmap ───────────────────────────────────────────────────────────────────
 
+def _generate_gradcam_heatmap(img: np.ndarray, cam: np.ndarray) -> str:
+    """Overlay a Grad-CAM activation map (low-res, [0,1]) onto the original image."""
+    h, w = img.shape[:2]
+    cam_resized = cv2.resize(cam, (w, h), interpolation=cv2.INTER_CUBIC)
+    cam_resized = cv2.GaussianBlur(cam_resized, (0, 0), sigmaX=w / 60)
+    cam_resized = np.clip(cam_resized, 0, 1)
+    cam_u8 = (cam_resized * 255).astype(np.uint8)
+
+    heatmap = cv2.applyColorMap(cam_u8, cv2.COLORMAP_JET)
+    img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+    overlay = cv2.addWeighted(img_bgr, 0.45, heatmap, 0.55, 0)
+
+    filename = f"heatmap_{uuid.uuid4().hex[:8]}.jpg"
+    cv2.imwrite(str(STATIC_DIR / filename), overlay)
+    return f"/static/{filename}"
+
+
 def _generate_heatmap(img: np.ndarray) -> str:
     """Noise residual heatmap: highlights regions with anomalous local statistics."""
     gray = _to_gray(img).astype(np.uint8)
@@ -278,15 +300,17 @@ def _generate_heatmap(img: np.ndarray) -> str:
 
 # ─── trained model inference ────────────────────────────────────────────────────
 
-def _cnn_predict(img: np.ndarray) -> tuple[str, dict[str, float]]:
-    """Run trained EfficientNet-B4 and return (class_name, {class: prob})."""
+def _cnn_predict(img: np.ndarray) -> tuple[str, dict[str, float], "torch.Tensor", int]:
+    """Run trained EfficientNet-B4 and return (class_name, {class: prob}, input_tensor, class_idx)."""
     import torch
     pil_img = Image.fromarray(img)
     tensor = _TRANSFORM(pil_img).unsqueeze(0)
-    probs = _MODEL.predict_proba(tensor).squeeze(0).tolist()
+    with torch.no_grad():
+        probs = _MODEL.predict_proba(tensor).squeeze(0).tolist()
     class_probs = {CLASSES[i]: round(probs[i], 4) for i in range(len(CLASSES))}
-    pred_class = CLASSES[int(np.argmax(probs))]
-    return pred_class, class_probs
+    class_idx = int(np.argmax(probs))
+    pred_class = CLASSES[class_idx]
+    return pred_class, class_probs, tensor, class_idx
 
 
 # ─── heuristic 3-class prediction ──────────────────────────────────────────────
@@ -372,17 +396,27 @@ def analyze(image_data: bytes) -> dict:
     texture   = _texture_score(img)
     edge      = _edge_score(img)
 
+    heuristic_pred, heuristic_probs, composite = _heuristic_predict(spectral, gan, noise, texture, edge)
+
     if _MODEL is not None:
-        prediction, class_probs = _cnn_predict(img)
-        is_fake = prediction != "REAL"
+        cnn_pred, cnn_probs, tensor, _ = _cnn_predict(img)
+        class_probs = fuse(cnn_probs, heuristic_probs)
+        prediction = max(class_probs, key=class_probs.get)
         confidence = class_probs[prediction]
+        signal_agreement = cnn_pred == heuristic_pred
+        is_fake = prediction != "REAL"
+        heatmap_url = None
+        if is_fake:
+            cam = _GRADCAM(tensor, CLASSES.index(prediction))
+            heatmap_url = _generate_gradcam_heatmap(img, cam)
     else:
-        prediction, class_probs, composite = _heuristic_predict(spectral, gan, noise, texture, edge)
-        is_fake = prediction != "REAL"
+        prediction, class_probs = heuristic_pred, heuristic_probs
         confidence = class_probs[prediction]
+        signal_agreement = None
+        is_fake = prediction != "REAL"
+        heatmap_url = _generate_heatmap(img) if is_fake else None
 
     forgery_type = _dominant_signal(spectral, gan, noise, texture, edge, prediction)
-    heatmap_url  = _generate_heatmap(img) if is_fake else None
 
     return {
         "prediction": prediction,
@@ -390,11 +424,13 @@ def analyze(image_data: bytes) -> dict:
         "forgery_type": forgery_type,
         "heatmap_url": heatmap_url,
         "class_probabilities": class_probs,
+        "signal_agreement": signal_agreement,
         "analysis": {
-            "cnn_score":     round(edge, 3),
-            "fft_score":     round(spectral, 3),
-            "gan_score":     round(gan, 3),
-            "noise_score":   round(noise, 3),
-            "texture_score": round(texture, 3),
+            "edge_score":           round(edge, 3),
+            "fft_score":            round(spectral, 3),
+            "gan_score":            round(gan, 3),
+            "noise_score":          round(noise, 3),
+            "texture_score":        round(texture, 3),
+            "heuristic_composite":  round(composite, 3),
         },
     }

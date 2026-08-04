@@ -10,12 +10,14 @@ export interface BlindDetectionResult {
     AI_GENERATED: number;
     EDITED: number;
   };
+  signal_agreement: boolean | null;
   analysis: {
-    cnn_score:     number;
-    fft_score:     number;
-    gan_score:     number;
-    noise_score:   number;
-    texture_score: number;
+    edge_score:          number;
+    fft_score:           number;
+    gan_score:           number;
+    noise_score:         number;
+    texture_score:       number;
+    heuristic_composite: number;
   };
 }
 
@@ -28,3 +30,14 @@ export interface ComparativeResult {
 }
 
 export type DetectionStatus = 'idle' | 'uploading' | 'analyzing' | 'done' | 'error';
+
+export interface HistoryEntry {
+  id: number;
+  created_at: string;
+  mode: 'blind' | 'compare';
+  prediction: string | null;
+  confidence: number | null;
+  forgery_type: string | null;
+  thumbnail_url: string | null;
+  heatmap_url: string | null;
+}

@@ -20,6 +20,9 @@ backend/static/*.jpg
 backend/static/*.png
 backend/static/*.webp
 
+# Detection history database
+backend/history.db
+
 # Frontend
 frontend/node_modules/
 frontend/dist/

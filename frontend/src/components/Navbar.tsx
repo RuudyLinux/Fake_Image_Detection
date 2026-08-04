@@ -8,6 +8,7 @@ export default function Navbar() {
     { to: '/', label: 'Home' },
     { to: '/blind', label: 'Blind Detection' },
     { to: '/compare', label: 'Comparative' },
+    { to: '/history', label: 'History' },
   ];
 
   return (

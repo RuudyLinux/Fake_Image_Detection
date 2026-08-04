@@ -3,8 +3,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from routers.detect import router as detect_router
+from db import init_db
 
 app = FastAPI(title="FakeGuard AI API", version="1.0.0")
+init_db()
 
 app.add_middleware(
     CORSMiddleware,

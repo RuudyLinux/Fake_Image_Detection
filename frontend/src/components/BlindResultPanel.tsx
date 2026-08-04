@@ -1,7 +1,9 @@
+import { useState } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import { CheckCircle, Eye, Cpu, Scissors } from 'lucide-react';
+import { CheckCircle, Eye, Cpu, Scissors, FileDown, Loader2 } from 'lucide-react';
 import type { BlindDetectionResult, PredictionClass } from '../types';
 import ConfidenceBar from './ConfidenceBar';
+import { downloadBlindReport } from '../api/detection';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -59,6 +61,22 @@ export default function BlindResultPanel({ result, imageFile }: Props) {
   const previewUrl = URL.createObjectURL(imageFile);
   const forgeryLabel = FORGERY_LABELS[result.forgery_type] ?? result.forgery_type;
   const isFake = result.prediction !== 'REAL';
+  const [downloading, setDownloading] = useState(false);
+
+  const handleDownloadReport = async () => {
+    setDownloading(true);
+    try {
+      const blob = await downloadBlindReport(imageFile);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'fakeguard_report.pdf';
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   return (
     <div className="space-y-5 animate-in fade-in duration-500">
@@ -84,6 +102,18 @@ export default function BlindResultPanel({ result, imageFile }: Props) {
             )}
           </p>
         </div>
+        <button
+          onClick={handleDownloadReport}
+          disabled={downloading}
+          className="btn-secondary flex-shrink-0 text-sm"
+        >
+          {downloading ? (
+            <Loader2 size={16} className="animate-spin" />
+          ) : (
+            <FileDown size={16} />
+          )}
+          PDF Report
+        </button>
       </div>
 
       {/* Class Probability Breakdown */}
@@ -134,10 +164,19 @@ export default function BlindResultPanel({ result, imageFile }: Props) {
           color="purple"
         />
         <ConfidenceBar
-          label="Edge / CNN Proxy"
-          value={result.analysis.cnn_score}
+          label="Edge / Gradient Uniformity"
+          value={result.analysis.edge_score}
           color="green"
         />
+        {result.signal_agreement !== null && (
+          <p className="text-xs text-slate-500 pt-1">
+            CNN and heuristic signals{' '}
+            <span className={result.signal_agreement ? 'text-green-400' : 'text-yellow-400'}>
+              {result.signal_agreement ? 'agree' : 'disagree'}
+            </span>{' '}
+            on this verdict.
+          </p>
+        )}
       </div>
 
       {/* Image + Heatmap */}
