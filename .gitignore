@@ -10,7 +10,10 @@ build/
 .pytest_cache/
 
 # Model checkpoints (large binary files - download via Colab)
-backend/checkpoints/
+backend/checkpoints/*
+# ...except the fitted calibration temperature: tiny, and without it the
+# ensemble silently falls back to an uncalibrated T=1.0.
+!backend/checkpoints/calibration.json
 
 # Dataset (download via Kaggle)
 data/

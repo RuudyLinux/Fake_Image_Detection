@@ -1,0 +1,10 @@
+{
+  "temperature": 0.3224056661128998,
+  "ece_before": 0.08417556356788826,
+  "ece_after": 0.004706946329969802,
+  "members": [
+    "efficientnet_b4",
+    "convnext_tiny"
+  ],
+  "fitted_on": "held-out 50% split of val"
+}
