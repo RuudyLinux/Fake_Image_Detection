@@ -176,16 +176,32 @@ def main():
         shuffle=False, num_workers=args.workers, pin_memory=device.type == "cuda",
     )
 
+    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+
+    best_f1 = 0.0
     if args.resume:
         state = torch.load(args.resume, map_location=device)
         model.load_state_dict(state["model"])
-        print(f"Resumed from {args.resume}")
+        # The checkpoint's stored val_macro_f1 was measured against whatever
+        # val set existed AT THAT TRAINING TIME. If the val set has changed
+        # since (e.g. new data added), that stored number is not comparable
+        # to scores computed in THIS run's loop below — comparing across
+        # different val sets silently discarded a genuinely better checkpoint
+        # here once already. Always re-measure on the CURRENT val_loader.
+        print(f"Resumed from {args.resume} — measuring true baseline on current val set...")
+        baseline_m = eval_epoch(model, val_loader, criterion, device)
+        best_f1 = baseline_m["macro_f1"]
+        stored_f1 = state.get("val_macro_f1")
+        print(f"Baseline on current val set: macro_f1={best_f1:.4f}"
+              + (f"  (checkpoint's own stored value was {stored_f1:.4f}, from a different val set — ignored)"
+                 if stored_f1 is not None and abs(stored_f1 - best_f1) > 1e-6 else ""))
 
     ckpt_path = CHECKPOINT_DIR / (args.out or f"{args.arch}_fake.pth")
+    if args.resume and ckpt_path.resolve() == Path(args.resume).resolve() and args.out is None:
+        print(f"WARNING: writing back to the resumed checkpoint ({ckpt_path}). "
+              f"Only strictly better epochs (> {best_f1:.4f}) will be saved.")
 
-    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
     scaler = GradScaler()
-    best_f1 = 0.0
     epochs_since_best = 0
     scheduler = None
 

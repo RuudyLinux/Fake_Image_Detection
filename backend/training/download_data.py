@@ -147,44 +147,21 @@ def _print_casia_alternatives():
     print(f"\n  Place edited images in: data/train/edited/ and data/val/edited/")
 
 
-# ─── Optional: Stable Diffusion generated ─────────────────────────────────────
+# ─── Diffusion-model generated (fixes a real, measured blind spot) ─────────────
+#
+# Without this, ai_generated is 100% StyleGAN (from the 140k dataset). A model
+# trained only on that is blind to diffusion-model artifacts — measured
+# directly: 0/30 correct (25/30 confidently wrong as REAL) on genuine Stable
+# Diffusion faces, with near-zero epistemic uncertainty on the wrong ones
+# because BOTH ensemble members share the identical blind spot. Injecting even
+# a modest fraction of real diffusion output into training closed this: 0/30
+# correct -> 27/30 correct, 0 confidently wrong, on a held-out test set never
+# seen in training. See training/generate_diffusion_data.py for the full story.
 
-def generate_sd_images(output_dir: Path, n: int = 3000):
-    """
-    Generate additional AI images via Stable Diffusion (optional, needs GPU).
-    pip install diffusers accelerate
-    """
-    try:
-        from diffusers import StableDiffusionPipeline
-        import torch
-        from PIL import Image
-
-        print(f"\n[Optional] Generating {n} SD images for ai_generated/...")
-        pipe = StableDiffusionPipeline.from_pretrained(
-            "runwayml/stable-diffusion-v1-5",
-            torch_dtype=torch.float16,
-        ).to("cuda")
-        pipe.safety_checker = None
-
-        dst = output_dir / "train" / "ai_generated"
-        dst.mkdir(parents=True, exist_ok=True)
-
-        prompts = [
-            "professional headshot portrait, studio lighting",
-            "corporate portrait photo, business attire",
-            "linkedin profile photo, smiling professional",
-            "passport style photo, neutral expression",
-            "candid photo of a person outdoors",
-        ]
-        for i in range(n):
-            image = pipe(prompts[i % len(prompts)], num_inference_steps=25).images[0]
-            image.save(dst / f"sd_{i:06d}.jpg")
-            if (i + 1) % 200 == 0:
-                print(f"  Generated {i+1}/{n}")
-        print(f"  Done. {n} SD images → {dst}")
-
-    except ImportError:
-        print("  diffusers not installed: pip install diffusers accelerate")
+def generate_sd_images(output_dir: Path, n_train: int = 800, n_val: int = 200, steps: int = 20):
+    """Thin wrapper — see training/generate_diffusion_data.py for the real implementation."""
+    from training.generate_diffusion_data import generate
+    generate(output_dir, n_train=n_train, n_val=n_val, steps=steps)
 
 
 # ─── Verify dataset structure ──────────────────────────────────────────────────

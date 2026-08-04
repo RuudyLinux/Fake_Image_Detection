@@ -12,3 +12,8 @@ kaggle>=1.6.0
 reportlab==5.0.0
 ImageHash==4.3.2
 scikit-learn==1.9.0
+
+# training/generate_diffusion_data.py only — not needed to run the API
+diffusers==0.39.0
+accelerate==1.14.0
+safetensors==0.8.0
