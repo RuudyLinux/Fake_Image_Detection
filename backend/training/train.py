@@ -22,7 +22,7 @@ from torch.cuda.amp import GradScaler, autocast
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from models.cnn_model import FakeImageDetector, CLASSES, NUM_CLASSES
+from models.cnn_model import build_model, CLASSES, NUM_CLASSES
 from training.dataset import FakeImageDataset
 
 CHECKPOINT_DIR = Path(__file__).parent.parent / "checkpoints"
@@ -144,6 +144,11 @@ def main():
                          help="Accumulate gradients over N steps to simulate a larger batch under VRAM limits.")
     parser.add_argument("--patience",      type=int,   default=8,
                          help="Stop if val macro-F1 hasn't improved for this many epochs.")
+    parser.add_argument("--arch",          default="efficientnet_b4",
+                         choices=["efficientnet_b4", "convnext_tiny"],
+                         help="Backbone architecture. Ensemble members should differ.")
+    parser.add_argument("--out",           default=None,
+                         help="Checkpoint filename (defaults to <arch>_fake.pth).")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -154,8 +159,12 @@ def main():
     effective_bs = args.batch_size * args.grad_accum_steps
     print(f"Batch size: {args.batch_size}  x  accum {args.grad_accum_steps}  =  effective {effective_bs}")
 
-    train_ds = FakeImageDataset(args.data, split="train")
-    val_ds   = FakeImageDataset(args.data, split="val")
+    model, img_size = build_model(args.arch, pretrained=True)
+    model = model.to(device)
+    print(f"Architecture: {args.arch}  |  input size: {img_size}px")
+
+    train_ds = FakeImageDataset(args.data, split="train", img_size=img_size)
+    val_ds   = FakeImageDataset(args.data, split="val",   img_size=img_size)
 
     train_loader = DataLoader(
         train_ds, batch_size=args.batch_size,
@@ -167,11 +176,12 @@ def main():
         shuffle=False, num_workers=args.workers, pin_memory=device.type == "cuda",
     )
 
-    model = FakeImageDetector(pretrained=True).to(device)
     if args.resume:
         state = torch.load(args.resume, map_location=device)
         model.load_state_dict(state["model"])
         print(f"Resumed from {args.resume}")
+
+    ckpt_path = CHECKPOINT_DIR / (args.out or f"{args.arch}_fake.pth")
 
     criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
     scaler = GradScaler()
@@ -216,10 +226,11 @@ def main():
         if val_m["macro_f1"] > best_f1:
             best_f1 = val_m["macro_f1"]
             epochs_since_best = 0
-            ckpt_path = CHECKPOINT_DIR / "efficientnet_b4_fake.pth"
             torch.save({
                 "epoch": epoch,
                 "model": model.state_dict(),
+                "arch": args.arch,
+                "img_size": img_size,
                 "val_macro_f1": best_f1,
                 "val_acc": val_m["acc"],
                 "classes": CLASSES,
@@ -232,7 +243,7 @@ def main():
                 break
 
     print(f"\nTraining complete. Best val macro-F1: {best_f1:.4f}")
-    print(f"Checkpoint: {CHECKPOINT_DIR / 'efficientnet_b4_fake.pth'}")
+    print(f"Checkpoint: {ckpt_path}")
 
 
 if __name__ == "__main__":

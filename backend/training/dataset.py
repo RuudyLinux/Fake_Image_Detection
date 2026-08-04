@@ -25,7 +25,7 @@ import random
 from pathlib import Path
 from typing import Tuple
 
-from PIL import Image
+from PIL import Image, ImageFilter
 import torch
 from torch.utils.data import Dataset, WeightedRandomSampler
 import torchvision.transforms as T
@@ -60,33 +60,72 @@ class GaussianNoise:
         return (tensor + torch.randn_like(tensor) * std).clamp(0, 1)
 
 
-def build_transforms(split: str) -> T.Compose:
+class RandomDownscale:
+    """
+    Downscale then restore size — simulates CDN/messenger resizing and
+    thumbnailing. Robustness testing showed the model losing ~15 points of
+    accuracy on 0.25x-rescaled inputs, because nothing in the original recipe
+    taught it to survive resampling.
+    """
+    def __init__(self, scale_range=(0.35, 1.0), p: float = 0.4):
+        self.scale_range = scale_range
+        self.p = p
+
+    def __call__(self, img: Image.Image) -> Image.Image:
+        if random.random() > self.p:
+            return img
+        factor = random.uniform(*self.scale_range)
+        w, h = img.size
+        small = img.resize((max(int(w * factor), 8), max(int(h * factor), 8)), Image.BILINEAR)
+        return small.resize((w, h), Image.BILINEAR)
+
+
+class RandomBlur:
+    """
+    Mild Gaussian blur. Blur was the single worst robustness failure (99.7% ->
+    78.8% at radius 2.0) precisely because it was absent from training.
+    """
+    def __init__(self, radius_range=(0.0, 1.8), p: float = 0.3):
+        self.radius_range = radius_range
+        self.p = p
+
+    def __call__(self, img: Image.Image) -> Image.Image:
+        if random.random() > self.p:
+            return img
+        radius = random.uniform(*self.radius_range)
+        return img.filter(ImageFilter.GaussianBlur(radius=radius))
+
+
+def build_transforms(split: str, img_size: int = IMG_SIZE) -> T.Compose:
     normalize = T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 
     if split == "train":
         return T.Compose([
-            T.Resize((IMG_SIZE + 40, IMG_SIZE + 40)),
-            T.RandomCrop(IMG_SIZE),
+            T.Resize((img_size + 40, img_size + 40)),
+            T.RandomCrop(img_size),
             T.RandomHorizontalFlip(p=0.5),
             T.RandomRotation(degrees=12),
             T.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2, hue=0.05),
             T.RandomGrayscale(p=0.05),
-            JPEGAugment(quality_range=(55, 95)),
+            RandomDownscale(scale_range=(0.35, 1.0), p=0.4),
+            RandomBlur(radius_range=(0.0, 1.8), p=0.3),
+            JPEGAugment(quality_range=(40, 95)),
             T.ToTensor(),
-            GaussianNoise(std_range=(0.0, 0.015)),
+            GaussianNoise(std_range=(0.0, 0.03)),
             normalize,
         ])
     else:
         return T.Compose([
-            T.Resize((IMG_SIZE, IMG_SIZE)),
+            T.Resize((img_size, img_size)),
             T.ToTensor(),
             normalize,
         ])
 
 
 class FakeImageDataset(Dataset):
-    def __init__(self, root: str, split: str = "train"):
+    def __init__(self, root: str, split: str = "train", img_size: int = IMG_SIZE):
         self.split = split
+        self.img_size = img_size
         base = Path(root) / split
 
         self.paths: list[Tuple[Path, int]] = []
@@ -108,7 +147,7 @@ class FakeImageDataset(Dataset):
                 "Expected subdirs: real/, ai_generated/, edited/"
             )
 
-        self.transform = build_transforms(split)
+        self.transform = build_transforms(split, img_size)
 
         total = len(self.paths)
         print(f"[{split}] " + "  ".join(f"{k}={v:,}" for k, v in counts.items()) + f"  total={total:,}")
@@ -121,7 +160,7 @@ class FakeImageDataset(Dataset):
         try:
             img = Image.open(path).convert("RGB")
         except Exception:
-            img = Image.new("RGB", (IMG_SIZE, IMG_SIZE), color=(128, 128, 128))
+            img = Image.new("RGB", (self.img_size, self.img_size), color=(128, 128, 128))
         return self.transform(img), torch.tensor(label, dtype=torch.long)
 
     def make_sampler(self) -> WeightedRandomSampler:

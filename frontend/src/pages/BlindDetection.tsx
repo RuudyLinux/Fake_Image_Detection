@@ -12,6 +12,10 @@ export default function BlindDetection() {
   const [error, setError] = useState<string | null>(null);
   const [confidenceThreshold, setConfidenceThreshold] = useState(0.5);
   const [enableGradcam, setEnableGradcam] = useState(true);
+  const [useTta, setUseTta] = useState(true);
+  const [allowAbstain, setAllowAbstain] = useState(true);
+
+  const options = { confidenceThreshold, enableGradcam, useTta, allowAbstain };
 
   const handleAnalyze = async () => {
     if (!file) return;
@@ -19,7 +23,7 @@ export default function BlindDetection() {
     setError(null);
     setResult(null);
     try {
-      const data = await detectBlind(file, { confidenceThreshold, enableGradcam });
+      const data = await detectBlind(file, options);
       setResult(data);
       setStatus('done');
     } catch (err: unknown) {
@@ -115,6 +119,34 @@ export default function BlindDetection() {
                 />
                 Enable Grad-CAM heatmap
               </label>
+              <div>
+                <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={useTta}
+                    onChange={(e) => setUseTta(e.target.checked)}
+                    className="accent-purple-500"
+                  />
+                  Test-time augmentation
+                </label>
+                <p className="text-xs text-slate-600 mt-0.5 ml-6">
+                  Averages several views. More accurate, slower.
+                </p>
+              </div>
+              <div>
+                <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={allowAbstain}
+                    onChange={(e) => setAllowAbstain(e.target.checked)}
+                    className="accent-purple-500"
+                  />
+                  Allow &ldquo;uncertain&rdquo; verdict
+                </label>
+                <p className="text-xs text-slate-600 mt-0.5 ml-6">
+                  Decline to answer rather than guess on ambiguous images.
+                </p>
+              </div>
             </div>
 
             {/* Info card */}
@@ -171,11 +203,7 @@ export default function BlindDetection() {
             )}
 
             {status === 'done' && result && file && (
-              <BlindResultPanel
-                result={result}
-                imageFile={file}
-                reportOptions={{ confidenceThreshold, enableGradcam }}
-              />
+              <BlindResultPanel result={result} imageFile={file} reportOptions={options} />
             )}
           </div>
         </div>

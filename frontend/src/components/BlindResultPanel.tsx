@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import { CheckCircle, Eye, Cpu, Scissors, FileDown, Loader2 } from 'lucide-react';
-import type { BlindDetectionResult, PredictionClass } from '../types';
+import { CheckCircle, Eye, Cpu, Scissors, FileDown, Loader2, HelpCircle, Layers } from 'lucide-react';
+import type { BlindDetectionResult, Verdict } from '../types';
 import ConfidenceBar from './ConfidenceBar';
 import { downloadBlindReport, type BlindDetectionOptions } from '../api/detection';
 
@@ -17,7 +17,14 @@ const FORGERY_LABELS: Record<string, string> = {
   none:                 'None',
 };
 
-const CLASS_CONFIG: Record<PredictionClass, {
+const ABSTAIN_REASONS: Record<string, string> = {
+  low_confidence: 'no class reached a decisive score',
+  member_disagreement: 'the two models disagreed — the image may be unlike anything in training',
+  below_user_threshold: 'confidence fell below the threshold you set',
+  heuristics_only: 'no trained model is loaded, so only weak forensic heuristics were available',
+};
+
+const CLASS_CONFIG: Record<Verdict, {
   label: string;
   color: string;
   bgColor: string;
@@ -25,6 +32,14 @@ const CLASS_CONFIG: Record<PredictionClass, {
   icon: LucideIcon;
   desc: string;
 }> = {
+  UNCERTAIN: {
+    label: 'UNCERTAIN',
+    color: 'text-yellow-400',
+    bgColor: 'bg-yellow-900/30',
+    borderColor: 'border-yellow-700/50',
+    icon: HelpCircle,
+    desc: 'The system is declining to commit to a verdict. Treat this as "needs human review", not as evidence either way.',
+  },
   REAL: {
     label: 'REAL',
     color: 'text-green-400',
@@ -91,23 +106,44 @@ export default function BlindResultPanel({ result, imageFile, reportOptions }: P
           <p className="text-sm text-slate-400 uppercase tracking-widest font-medium">Verdict</p>
           <p className={`text-3xl font-bold ${cfg.color}`}>{cfg.label}</p>
           <p className="text-slate-400 text-sm mt-0.5">{cfg.desc}</p>
-          {!result.meets_threshold && (
+
+          {result.abstained && (
+            <div className="mt-2 space-y-1">
+              <p className="text-xs text-slate-300">
+                Models leaned toward{' '}
+                <span className="font-semibold text-slate-100">
+                  {result.model_prediction.replace('_', ' ')}
+                </span>{' '}
+                at {Math.round(result.confidence * 100)}% — not enough to commit.
+              </p>
+              <ul className="text-xs text-yellow-400/90 space-y-0.5">
+                {result.abstain_reasons.map((reason) => (
+                  <li key={reason}>• {ABSTAIN_REASONS[reason] ?? reason}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {!result.abstained && !result.meets_threshold && (
             <p className="text-yellow-400 text-xs font-semibold mt-1">
               ⚠ Below your confidence threshold — verify manually.
             </p>
           )}
-          <p className="text-slate-400 text-xs mt-1">
-            Confidence:{' '}
-            <span className="text-slate-200 font-semibold">
-              {Math.round(result.confidence * 100)}%
-            </span>
-            {result.forgery_type !== 'none' && (
-              <>
-                {' '}· Primary signal:{' '}
-                <span className="text-purple-400 font-semibold">{forgeryLabel}</span>
-              </>
-            )}
-          </p>
+
+          {!result.abstained && (
+            <p className="text-slate-400 text-xs mt-1">
+              Confidence:{' '}
+              <span className="text-slate-200 font-semibold">
+                {Math.round(result.confidence * 100)}%
+              </span>
+              {result.forgery_type !== 'none' && (
+                <>
+                  {' '}· Primary signal:{' '}
+                  <span className="text-purple-400 font-semibold">{forgeryLabel}</span>
+                </>
+              )}
+            </p>
+          )}
         </div>
         <button
           onClick={handleDownloadReport}
@@ -122,6 +158,65 @@ export default function BlindResultPanel({ result, imageFile, reportOptions }: P
           PDF Report
         </button>
       </div>
+
+      {/* Ensemble + uncertainty */}
+      {result.ensemble && result.uncertainty && (
+        <div className="card space-y-3">
+          <h3 className="font-semibold text-slate-200 flex items-center gap-2">
+            <Layers size={16} className="text-purple-400" /> Model Ensemble
+          </h3>
+
+          {result.member_probabilities && (
+            <div className="space-y-2">
+              {Object.entries(result.member_probabilities).map(([name, probs]) => {
+                const top = Object.entries(probs).sort((a, b) => b[1] - a[1])[0];
+                return (
+                  <div key={name} className="flex items-center justify-between text-sm">
+                    <span className="text-slate-400 font-mono text-xs">{name}</span>
+                    <span className="text-slate-200">
+                      {top[0].replace('_', ' ')}{' '}
+                      <span className="text-slate-500">{Math.round(top[1] * 100)}%</span>
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          <div className="border-t border-dark-300 pt-3 space-y-1.5 text-xs">
+            <div className="flex justify-between">
+              <span className="text-slate-400">Models agree</span>
+              <span className={result.ensemble.members_agree ? 'text-green-400' : 'text-yellow-400'}>
+                {result.ensemble.members_agree ? 'yes' : 'no'}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-400">
+                Epistemic uncertainty
+                <span className="text-slate-600"> (disagreement / novelty)</span>
+              </span>
+              <span className="text-slate-200 font-mono">
+                {result.uncertainty.epistemic.toFixed(3)}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-slate-400">
+                Aleatoric uncertainty
+                <span className="text-slate-600"> (genuine ambiguity)</span>
+              </span>
+              <span className="text-slate-200 font-mono">
+                {result.uncertainty.aleatoric.toFixed(3)}
+              </span>
+            </div>
+            <div className="flex justify-between text-slate-600">
+              <span>
+                {result.ensemble.tta_used ? 'TTA on' : 'TTA off'} · calibration T=
+                {result.ensemble.temperature.toFixed(3)}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Class Probability Breakdown */}
       <div className="card space-y-3">

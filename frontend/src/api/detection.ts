@@ -9,9 +9,25 @@ const api = axios.create({
 export interface BlindDetectionOptions {
   confidenceThreshold: number; // 0-1
   enableGradcam: boolean;
+  /** Averages over resample-free views; more accurate, ~4x slower. */
+  useTta: boolean;
+  /** Allow the system to answer UNCERTAIN instead of guessing. */
+  allowAbstain: boolean;
 }
 
-const DEFAULT_OPTIONS: BlindDetectionOptions = { confidenceThreshold: 0.5, enableGradcam: true };
+const DEFAULT_OPTIONS: BlindDetectionOptions = {
+  confidenceThreshold: 0.5,
+  enableGradcam: true,
+  useTta: true,
+  allowAbstain: true,
+};
+
+function appendOptions(form: FormData, options: BlindDetectionOptions): void {
+  form.append('confidence_threshold', String(options.confidenceThreshold));
+  form.append('enable_gradcam', String(options.enableGradcam));
+  form.append('use_tta', String(options.useTta));
+  form.append('allow_abstain', String(options.allowAbstain));
+}
 
 export async function detectBlind(
   file: File,
@@ -19,8 +35,7 @@ export async function detectBlind(
 ): Promise<BlindDetectionResult> {
   const form = new FormData();
   form.append('image', file);
-  form.append('confidence_threshold', String(options.confidenceThreshold));
-  form.append('enable_gradcam', String(options.enableGradcam));
+  appendOptions(form, options);
   const { data } = await api.post<BlindDetectionResult>('/detect/blind', form, {
     headers: { 'Content-Type': 'multipart/form-data' },
   });
@@ -33,8 +48,7 @@ export async function downloadBlindReport(
 ): Promise<Blob> {
   const form = new FormData();
   form.append('image', file);
-  form.append('confidence_threshold', String(options.confidenceThreshold));
-  form.append('enable_gradcam', String(options.enableGradcam));
+  appendOptions(form, options);
   const { data } = await api.post('/detect/blind/report', form, {
     headers: { 'Content-Type': 'multipart/form-data' },
     responseType: 'blob',

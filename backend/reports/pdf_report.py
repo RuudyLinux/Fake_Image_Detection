@@ -22,6 +22,14 @@ VERDICT_COLORS = {
     "REAL": colors.HexColor("#22c55e"),
     "AI_GENERATED": colors.HexColor("#ef4444"),
     "EDITED": colors.HexColor("#f97316"),
+    "UNCERTAIN": colors.HexColor("#eab308"),
+}
+
+ABSTAIN_REASONS = {
+    "low_confidence": "no class reached a decisive score",
+    "member_disagreement": "ensemble members disagreed (input may be unlike the training data)",
+    "below_user_threshold": "confidence fell below the configured threshold",
+    "heuristics_only": "no trained model loaded; only weak forensic heuristics available",
 }
 
 SIGNAL_LABELS = {
@@ -56,14 +64,47 @@ def generate_blind_report(image_bytes: bytes, result: dict) -> bytes:
     story.append(Spacer(1, 10 * mm))
 
     story.append(Paragraph(f"Verdict: {result['prediction'].replace('_', ' ')}", verdict_style))
-    story.append(Paragraph(
-        f"Confidence: {result['confidence'] * 100:.1f}%  ·  "
-        f"Primary signal: {SIGNAL_LABELS.get(result['forgery_type'], result['forgery_type'])}",
-        styles["Normal"],
-    ))
+
+    if result.get("abstained"):
+        leaning = result.get("model_prediction", "?").replace("_", " ")
+        story.append(Paragraph(
+            f"The system declined to commit to a verdict. Models leaned toward "
+            f"<b>{leaning}</b> at {result['confidence'] * 100:.1f}% confidence, which was "
+            f"not sufficient. Treat this as <b>needs human review</b>, not as evidence "
+            f"either way.",
+            styles["Normal"],
+        ))
+        for reason in result.get("abstain_reasons", []):
+            story.append(Paragraph(
+                f"&bull; {ABSTAIN_REASONS.get(reason, reason)}", styles["Normal"]
+            ))
+    else:
+        story.append(Paragraph(
+            f"Confidence: {result['confidence'] * 100:.1f}%  ·  "
+            f"Primary signal: {SIGNAL_LABELS.get(result['forgery_type'], result['forgery_type'])}",
+            styles["Normal"],
+        ))
+
     if result.get("signal_agreement") is not None:
         agreement = "agree" if result["signal_agreement"] else "disagree"
         story.append(Paragraph(f"CNN and heuristic signals {agreement} on this verdict.", styles["Normal"]))
+
+    ensemble = result.get("ensemble")
+    uncertainty = result.get("uncertainty")
+    if ensemble and uncertainty:
+        story.append(Paragraph(
+            f"Ensemble: {', '.join(ensemble['members'])} "
+            f"({'agreed' if ensemble['members_agree'] else 'disagreed'})  ·  "
+            f"TTA {'on' if ensemble['tta_used'] else 'off'}  ·  "
+            f"calibration T={ensemble['temperature']:.3f}",
+            styles["Normal"],
+        ))
+        story.append(Paragraph(
+            f"Uncertainty — epistemic (model disagreement / novelty): "
+            f"{uncertainty['epistemic']:.3f} nats  ·  "
+            f"aleatoric (genuine ambiguity): {uncertainty['aleatoric']:.3f} nats",
+            styles["Normal"],
+        ))
     story.append(Spacer(1, 8 * mm))
 
     # class probabilities table

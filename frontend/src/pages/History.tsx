@@ -9,6 +9,7 @@ const VERDICT_STYLE: Record<string, string> = {
   REAL: 'text-green-400 bg-green-900/30 border-green-700/50',
   AI_GENERATED: 'text-red-400 bg-red-900/30 border-red-700/50',
   EDITED: 'text-orange-400 bg-orange-900/30 border-orange-700/50',
+  UNCERTAIN: 'text-yellow-400 bg-yellow-900/30 border-yellow-700/50',
   AUTHENTIC: 'text-green-400 bg-green-900/30 border-green-700/50',
   MANIPULATED: 'text-orange-400 bg-orange-900/30 border-orange-700/50',
 };

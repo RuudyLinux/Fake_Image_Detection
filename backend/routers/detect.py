@@ -38,13 +38,17 @@ async def detect_blind(
     image: UploadFile = File(...),
     confidence_threshold: float = Form(0.5),
     enable_gradcam: bool = Form(True),
+    use_tta: bool = Form(True),
+    allow_abstain: bool = Form(True),
 ):
     _validate_image(image)
     data = await image.read()
     if len(data) > MAX_SIZE:
         raise HTTPException(413, "Image exceeds 20 MB limit")
     try:
-        result = blind_detector.analyze(data, confidence_threshold, enable_gradcam)
+        result = blind_detector.analyze(
+            data, confidence_threshold, enable_gradcam, use_tta, allow_abstain
+        )
         thumbnail_url = _save_thumbnail(data)
         db.insert_detection("blind", result, thumbnail_url)
     except Exception as exc:
@@ -57,13 +61,17 @@ async def detect_blind_report(
     image: UploadFile = File(...),
     confidence_threshold: float = Form(0.5),
     enable_gradcam: bool = Form(True),
+    use_tta: bool = Form(True),
+    allow_abstain: bool = Form(True),
 ):
     _validate_image(image)
     data = await image.read()
     if len(data) > MAX_SIZE:
         raise HTTPException(413, "Image exceeds 20 MB limit")
     try:
-        result = blind_detector.analyze(data, confidence_threshold, enable_gradcam)
+        result = blind_detector.analyze(
+            data, confidence_threshold, enable_gradcam, use_tta, allow_abstain
+        )
         pdf_bytes = generate_blind_report(data, result)
     except Exception as exc:
         raise HTTPException(500, f"Report generation error: {exc}") from exc

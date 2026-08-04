@@ -1,9 +1,31 @@
 export type PredictionClass = 'REAL' | 'AI_GENERATED' | 'EDITED';
+export type Verdict = PredictionClass | 'UNCERTAIN';
+
+export interface UncertaintyBreakdown {
+  /** Total uncertainty in the fused distribution (nats). */
+  predictive_entropy: number;
+  /** Irreducible ambiguity — the image genuinely sits near a class boundary. */
+  aleatoric: number;
+  /** Model disagreement — high values flag inputs unlike the training data. */
+  epistemic: number;
+}
+
+export interface EnsembleMeta {
+  members: string[];
+  members_agree: boolean;
+  tta_used: boolean;
+  temperature: number;
+}
 
 export interface BlindDetectionResult {
-  prediction: PredictionClass;
+  /** UNCERTAIN when the system declines to commit. */
+  prediction: Verdict;
+  /** What the models leaned toward, even when the verdict is UNCERTAIN. */
+  model_prediction: PredictionClass;
   confidence: number;
   meets_threshold: boolean;
+  abstained: boolean;
+  abstain_reasons: string[];
   forgery_type: string;
   heatmap_url: string | null;
   class_probabilities: {
@@ -12,6 +34,9 @@ export interface BlindDetectionResult {
     EDITED: number;
   };
   signal_agreement: boolean | null;
+  uncertainty: UncertaintyBreakdown | null;
+  member_probabilities: Record<string, Record<string, number>> | null;
+  ensemble: EnsembleMeta | null;
   analysis: {
     edge_score:          number;
     fft_score:           number;

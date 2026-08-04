@@ -1,24 +1,26 @@
 """
-Blind detection: heuristic pipeline + optional trained EfficientNet-B4.
+Blind detection: forensic heuristics + a calibrated CNN ensemble.
 
-When checkpoints/efficientnet_b4_fake.pth exists (3-class model), the trained
-model drives the prediction. Heuristic signals remain active and are reported
-in the analysis breakdown for explainability.
+Decision pipeline, strongest evidence first:
 
-Prediction classes: REAL | AI_GENERATED | EDITED
+  1. ENSEMBLE — EfficientNet-B4 (380px) + ConvNeXt-Tiny (224px), each run with
+     resample-free test-time augmentation, logits temperature-calibrated, then
+     weight-averaged. Different architectures at different resolutions fail on
+     different inputs, so their disagreement is informative rather than noise.
 
-Heuristic signals (used when model absent, or for analysis breakdown):
-  1. Spectral decay   — natural images follow 1/f^alpha law; AI deviates
-  2. GAN periodic     — upsampling checkerboard at N/2 frequencies
-  3. Noise residual   — AI images are unnaturally smooth
-  4. Texture          — AI portraits have suspiciously uniform local texture
-  5. Edge/gradient    — AI images have abnormally sharp, uniform edges
+  2. HEURISTICS — spectral decay, GAN upsampling periodicity, noise residual,
+     texture uniformity, edge statistics, and JPEG error level analysis. These
+     carry a minority weight in the final fusion and provide the explainable
+     breakdown shown to the user.
 
-Heuristic class logic (no model):
-  composite >= 0.45 → FAKE
-    GAN-heavy (gan > spectral) → AI_GENERATED
-    Edit-heavy (noise/texture) → EDITED
-  composite < 0.45 → REAL
+  3. ABSTENTION — when the ensemble's confidence is low, or its members
+     disagree (high epistemic uncertainty, the signature of an input unlike
+     anything in training), the verdict is UNCERTAIN rather than a guess.
+
+Prediction classes: REAL | AI_GENERATED | EDITED | UNCERTAIN
+
+If no checkpoint is present the module degrades to heuristics alone, and the
+verdict is marked low-confidence accordingly.
 """
 
 import io
@@ -31,44 +33,46 @@ from pathlib import Path
 
 from models.fusion import fuse
 
-# ─── load trained CNN model (optional) ─────────────────────────────────────────
+# ─── load the calibrated ensemble (optional) ───────────────────────────────────
 
-_MODEL = None
-_TRANSFORM = None
+_ENSEMBLE = None
 _GRADCAM = None
 
-def _try_load_cnn():
-    global _MODEL, _TRANSFORM, _GRADCAM
-    checkpoint = Path(__file__).parent.parent / "checkpoints" / "efficientnet_b4_fake.pth"
-    if not checkpoint.exists():
-        return
 
+def _try_load_ensemble():
+    """
+    Build the ensemble, and attach Grad-CAM to the EfficientNet-B4 member.
+
+    Grad-CAM is deliberately taken from B4 rather than from the fused output:
+    a fused score has no single feature map to attribute against, and B4 runs
+    at 380px so its activation grid localises more precisely than ConvNeXt's
+    224px one.
+    """
+    global _ENSEMBLE, _GRADCAM
     try:
-        import torch
-        import torchvision.transforms as T
         sys.path.insert(0, str(Path(__file__).parent.parent))
-        from models.cnn_model import FakeImageDetector
+        from models.ensemble import EnsembleDetector
         from models.gradcam import build_gradcam
 
-        state = torch.load(checkpoint, map_location="cpu")
-        model = FakeImageDetector(pretrained=False)
-        model.load_state_dict(state["model"] if "model" in state else state)
-        model.eval()
+        ensemble = EnsembleDetector()  # auto-selects CUDA when available
+        if not ensemble.is_available:
+            print("[FakeGuard] No checkpoints found — heuristics only")
+            return
 
-        _MODEL = model
-        _GRADCAM = build_gradcam(model)
-        _TRANSFORM = T.Compose([
-            T.Resize((380, 380)),
-            T.ToTensor(),
-            T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-        ])
-        val_f1 = state.get("val_macro_f1", state.get("val_f1", "?"))
-        print(f"[FakeGuard] Loaded 3-class CNN (val_macro_f1={val_f1})")
+        _ENSEMBLE = ensemble
+        for member in ensemble.members:
+            if member["name"] == "efficientnet_b4":
+                _GRADCAM = build_gradcam(member["model"])
+                break
+
+        print(f"[FakeGuard] Ensemble ready: {ensemble.member_names}  "
+              f"temperature={ensemble.temperature:.4f}  "
+              f"grad_cam={'yes' if _GRADCAM else 'no'}")
     except Exception as e:
-        print(f"[FakeGuard] CNN load failed ({e}), using heuristics only")
+        print(f"[FakeGuard] Ensemble load failed ({e}), using heuristics only")
 
 
-_try_load_cnn()
+_try_load_ensemble()
 
 STATIC_DIR = Path(__file__).parent.parent / "static"
 STATIC_DIR.mkdir(exist_ok=True)
@@ -330,17 +334,9 @@ def _generate_heatmap(img: np.ndarray) -> str:
 
 # ─── trained model inference ────────────────────────────────────────────────────
 
-def _cnn_predict(img: np.ndarray) -> tuple[str, dict[str, float], "torch.Tensor", int]:
-    """Run trained EfficientNet-B4 and return (class_name, {class: prob}, input_tensor, class_idx)."""
-    import torch
-    pil_img = Image.fromarray(img)
-    tensor = _TRANSFORM(pil_img).unsqueeze(0)
-    with torch.no_grad():
-        probs = _MODEL.predict_proba(tensor).squeeze(0).tolist()
-    class_probs = {CLASSES[i]: round(probs[i], 4) for i in range(len(CLASSES))}
-    class_idx = int(np.argmax(probs))
-    pred_class = CLASSES[class_idx]
-    return pred_class, class_probs, tensor, class_idx
+def _ensemble_predict(img: np.ndarray, use_tta: bool = True) -> dict:
+    """Calibrated ensemble prediction with TTA and an uncertainty decomposition."""
+    return _ENSEMBLE.predict(img, use_tta=use_tta)
 
 
 # ─── heuristic 3-class prediction ──────────────────────────────────────────────
@@ -419,7 +415,13 @@ def _dominant_signal(spectral, gan, noise, texture, edge, ela, prediction) -> st
 
 # ─── main entry ────────────────────────────────────────────────────────────────
 
-def analyze(image_data: bytes, confidence_threshold: float = 0.5, enable_gradcam: bool = True) -> dict:
+def analyze(
+    image_data: bytes,
+    confidence_threshold: float = 0.5,
+    enable_gradcam: bool = True,
+    use_tta: bool = True,
+    allow_abstain: bool = True,
+) -> dict:
     img = _load_image(image_data)
 
     spectral  = _spectral_score(img)
@@ -429,36 +431,77 @@ def analyze(image_data: bytes, confidence_threshold: float = 0.5, enable_gradcam
     edge      = _edge_score(img)
     ela       = _ela_score(img)
 
-    heuristic_pred, heuristic_probs, composite = _heuristic_predict(spectral, gan, noise, texture, edge, ela)
+    heuristic_pred, heuristic_probs, composite = _heuristic_predict(
+        spectral, gan, noise, texture, edge, ela
+    )
 
-    if _MODEL is not None:
-        cnn_pred, cnn_probs, tensor, _ = _cnn_predict(img)
-        class_probs = fuse(cnn_probs, heuristic_probs)
-        prediction = max(class_probs, key=class_probs.get)
-        confidence = class_probs[prediction]
-        signal_agreement = cnn_pred == heuristic_pred
-        is_fake = prediction != "REAL"
+    uncertainty = None
+    member_probs = None
+    ensemble_meta = None
+
+    if _ENSEMBLE is not None:
+        ens = _ensemble_predict(img, use_tta=use_tta)
+
+        class_probs = fuse(ens["class_probabilities"], heuristic_probs)
+        model_prediction = max(class_probs, key=class_probs.get)
+        confidence = class_probs[model_prediction]
+
+        signal_agreement = ens["prediction"] == heuristic_pred
+        uncertainty = ens["uncertainty"]
+        member_probs = ens["members"]
+        ensemble_meta = {
+            "members": _ENSEMBLE.member_names,
+            "members_agree": ens["members_agree"],
+            "tta_used": ens["tta_used"],
+            "temperature": round(ens["temperature"], 4),
+        }
+
+        # Abstain on the ensemble's own signals, plus the user's confidence floor.
+        abstain_reasons = list(ens["abstain_reasons"])
+        if confidence < confidence_threshold:
+            abstain_reasons.append("below_user_threshold")
+
+        abstained = allow_abstain and bool(abstain_reasons)
+        prediction = "UNCERTAIN" if abstained else model_prediction
+
+        # Heatmap explains the model's actual leaning, so keep generating it
+        # even when abstaining — that is precisely when a human needs to look.
+        is_fake = model_prediction != "REAL"
         heatmap_url = None
-        if is_fake and enable_gradcam:
-            cam = _GRADCAM(tensor, CLASSES.index(prediction))
+        if is_fake and enable_gradcam and _GRADCAM is not None and ens["_b4_tensor"] is not None:
+            cam = _GRADCAM(ens["_b4_tensor"], CLASSES.index(model_prediction))
             heatmap_url = _generate_gradcam_heatmap(img, cam)
     else:
-        prediction, class_probs = heuristic_pred, heuristic_probs
-        confidence = class_probs[prediction]
+        model_prediction = heuristic_pred
+        class_probs = heuristic_probs
+        confidence = class_probs[model_prediction]
         signal_agreement = None
-        is_fake = prediction != "REAL"
+        # Heuristics alone are far weaker than the CNN; never present them as
+        # a confident verdict.
+        abstain_reasons = ["heuristics_only"]
+        if confidence < confidence_threshold:
+            abstain_reasons.append("below_user_threshold")
+        abstained = allow_abstain and confidence < confidence_threshold
+        prediction = "UNCERTAIN" if abstained else model_prediction
+        is_fake = model_prediction != "REAL"
         heatmap_url = _generate_heatmap(img) if (is_fake and enable_gradcam) else None
 
-    forgery_type = _dominant_signal(spectral, gan, noise, texture, edge, ela, prediction)
+    forgery_type = _dominant_signal(spectral, gan, noise, texture, edge, ela, model_prediction)
 
     return {
         "prediction": prediction,
+        "model_prediction": model_prediction,
         "confidence": round(confidence, 3),
         "meets_threshold": confidence >= confidence_threshold,
+        "abstained": abstained,
+        "abstain_reasons": abstain_reasons,
         "forgery_type": forgery_type,
         "heatmap_url": heatmap_url,
         "class_probabilities": class_probs,
         "signal_agreement": signal_agreement,
+        "uncertainty": uncertainty,
+        "member_probabilities": member_probs,
+        "ensemble": ensemble_meta,
         "analysis": {
             "edge_score":           round(edge, 3),
             "fft_score":            round(spectral, 3),
