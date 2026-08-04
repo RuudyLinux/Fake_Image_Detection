@@ -63,23 +63,27 @@ def compute_metrics(logits: torch.Tensor, labels: torch.Tensor) -> dict:
 
 # ─── train / eval loops ────────────────────────────────────────────────────────
 
-def train_epoch(model, loader, optimizer, criterion, scaler, device):
+def train_epoch(model, loader, optimizer, criterion, scaler, device, accum_steps=1):
     model.train()
     total_loss, all_logits, all_labels = 0.0, [], []
+    optimizer.zero_grad()
 
     for step, (imgs, labels) in enumerate(loader):
         imgs, labels = imgs.to(device), labels.to(device)
-        optimizer.zero_grad()
 
         with autocast():
             logits = model(imgs)
             loss = criterion(logits, labels)
 
-        scaler.scale(loss).backward()
-        scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        scaler.step(optimizer)
-        scaler.update()
+        scaler.scale(loss / accum_steps).backward()
+
+        is_last = (step + 1) == len(loader)
+        if (step + 1) % accum_steps == 0 or is_last:
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad()
 
         total_loss += loss.item()
         all_logits.append(logits.detach().cpu())
@@ -136,12 +140,19 @@ def main():
     parser.add_argument("--workers",       type=int,   default=4)
     parser.add_argument("--freeze-epochs", type=int,   default=5)
     parser.add_argument("--resume",        default=None)
+    parser.add_argument("--grad-accum-steps", type=int, default=1,
+                         help="Accumulate gradients over N steps to simulate a larger batch under VRAM limits.")
+    parser.add_argument("--patience",      type=int,   default=8,
+                         help="Stop if val macro-F1 hasn't improved for this many epochs.")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    torch.backends.cudnn.benchmark = True
     print(f"Device: {device}  |  Classes: {CLASSES}")
     if device.type == "cpu":
         print("WARNING: Training on CPU will be very slow. Use a GPU.")
+    effective_bs = args.batch_size * args.grad_accum_steps
+    print(f"Batch size: {args.batch_size}  x  accum {args.grad_accum_steps}  =  effective {effective_bs}")
 
     train_ds = FakeImageDataset(args.data, split="train")
     val_ds   = FakeImageDataset(args.data, split="val")
@@ -165,6 +176,7 @@ def main():
     criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
     scaler = GradScaler()
     best_f1 = 0.0
+    epochs_since_best = 0
     scheduler = None
 
     for epoch in range(1, args.epochs + 1):
@@ -190,7 +202,7 @@ def main():
             )
 
         t0 = time.time()
-        train_m = train_epoch(model, train_loader, optimizer, criterion, scaler, device)
+        train_m = train_epoch(model, train_loader, optimizer, criterion, scaler, device, args.grad_accum_steps)
         val_m   = eval_epoch(model, val_loader, criterion, device)
         elapsed = time.time() - t0
 
@@ -203,6 +215,7 @@ def main():
 
         if val_m["macro_f1"] > best_f1:
             best_f1 = val_m["macro_f1"]
+            epochs_since_best = 0
             ckpt_path = CHECKPOINT_DIR / "efficientnet_b4_fake.pth"
             torch.save({
                 "epoch": epoch,
@@ -212,6 +225,11 @@ def main():
                 "classes": CLASSES,
             }, ckpt_path)
             print(f"  ✓ Best checkpoint saved (macro_f1={best_f1:.4f}) → {ckpt_path}")
+        else:
+            epochs_since_best += 1
+            if epochs_since_best >= args.patience:
+                print(f"\nNo improvement for {args.patience} epochs. Early stopping.")
+                break
 
     print(f"\nTraining complete. Best val macro-F1: {best_f1:.4f}")
     print(f"Checkpoint: {CHECKPOINT_DIR / 'efficientnet_b4_fake.pth'}")

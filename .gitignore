@@ -33,6 +33,7 @@ frontend/dist/
 .idea/
 *.suo
 *.user
+.claude/
 
 # OS
 .DS_Store
