@@ -79,7 +79,17 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.backends.cudnn.benchmark = True
 
-    available = [s for s in MEMBER_SPECS if (CHECKPOINT_DIR / s["checkpoint"]).exists()]
+    # CNN members only: this loop loads via build_model(spec["arch"]), which
+    # only knows the CNN architectures. The CLIP member (kind="clip") is
+    # loaded differently (models.clip_detector.load_clip_detector) and isn't
+    # wired into this fitting loop yet — it runs at inference under the
+    # CNN-fitted shared temperature as an approximation. Known gap, not a
+    # silent one: a linear probe's logit scale differs from a fine-tuned
+    # CNN's, so its calibration is likely off until this is done properly.
+    available = [
+        s for s in MEMBER_SPECS
+        if s.get("kind", "cnn") == "cnn" and (CHECKPOINT_DIR / s["checkpoint"]).exists()
+    ]
     if not available:
         print("No checkpoints found — nothing to calibrate.")
         return

@@ -13,6 +13,13 @@ reportlab==5.0.0
 ImageHash==4.3.2
 scikit-learn==1.9.0
 
+# models/clip_detector.py — optional 3rd ensemble member (frozen CLIP + linear
+# probe). ensemble.py loads it in a try/except and skips it if this or
+# checkpoints/clip_probe.pth is missing, so it's not a hard requirement to
+# run the API — but it IS needed to get the generalization benefit it exists
+# for. See clip_detector.py's docstring.
+transformers==5.14.1
+
 # training/generate_diffusion_data.py only — not needed to run the API
 diffusers==0.39.0
 accelerate==1.14.0

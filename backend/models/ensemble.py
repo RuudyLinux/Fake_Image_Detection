@@ -27,6 +27,18 @@ when they are all wrong, and would make this term uselessly small.
 
 Verdicts below the confidence floor, or above the disagreement ceiling, are
 returned as UNCERTAIN rather than forced into a class.
+
+Optional third member: a frozen-CLIP linear probe (models/clip_detector.py),
+loaded when checkpoints/clip_probe.pth exists. The other two members are CNNs
+fine-tuned end-to-end on this project's training set, which teaches them that
+training set's specific generators' artifacts — a fix that does not transfer
+to generators that did not exist at training time (measured directly: see
+training/generate_diffusion_data.py's StyleGAN-to-SD blind spot, where BOTH
+CNN members failed identically and MI-based abstention never fired). The CLIP
+member's backbone is frozen and never fine-tuned, so it encodes a broad prior
+over natural-image statistics rather than this dataset's generators, and it
+fails differently enough from the two CNNs to make the MI term meaningful
+again on inputs unlike anything either CNN has seen.
 """
 
 import sys
@@ -49,8 +61,15 @@ CHECKPOINT_DIR = Path(__file__).parent.parent / "checkpoints"
 # carries more weight: it sees 380px vs 224px, so it retains finer forensic
 # detail. Weights are renormalised over whichever members actually load.
 MEMBER_SPECS = [
-    {"arch": "efficientnet_b4", "checkpoint": "efficientnet_b4_fake.pth", "weight": 0.6},
-    {"arch": "convnext_tiny",   "checkpoint": "convnext_tiny_fake.pth",   "weight": 0.4},
+    {"arch": "efficientnet_b4", "checkpoint": "efficientnet_b4_fake.pth", "weight": 0.5, "kind": "cnn"},
+    {"arch": "convnext_tiny",   "checkpoint": "convnext_tiny_fake.pth",   "weight": 0.3, "kind": "cnn"},
+    # Lower weight than the CNNs on in-distribution data (its own val macro-F1
+    # is typically lower than the fine-tuned CNNs' — a linear probe on frozen
+    # features is a weaker fit to THIS training set by design). Its value is
+    # generalization to generators outside that set, which weight alone
+    # doesn't capture; contributes there mainly through raising member
+    # disagreement (MI) on inputs the CNNs are silently wrong about.
+    {"arch": "clip_probe",      "checkpoint": "clip_probe.pth",           "weight": 0.2, "kind": "clip"},
 ]
 
 # Abstain thresholds. MI is in nats; ln(3) ~ 1.0986 is maximum possible entropy
@@ -87,20 +106,29 @@ class EnsembleDetector:
             path = CHECKPOINT_DIR / spec["checkpoint"]
             if not path.exists():
                 continue
+            kind = spec.get("kind", "cnn")
             try:
-                state = torch.load(path, map_location="cpu")
-                model, img_size = build_model(spec["arch"], pretrained=False)
-                model.load_state_dict(state["model"] if "model" in state else state)
-                model.eval().to(self.device)
-                self.members.append({
-                    "name": spec["arch"],
-                    "model": model,
-                    "transform": _build_transform(state.get("img_size", img_size)),
-                    "weight": spec["weight"],
-                    "val_macro_f1": state.get("val_macro_f1"),
-                })
+                if kind == "clip":
+                    from models.clip_detector import load_clip_detector
+                    model = load_clip_detector(path, device=str(self.device))
+                    val_f1 = torch.load(path, map_location="cpu").get("val_macro_f1")
+                    self.members.append({
+                        "name": spec["arch"], "kind": "clip", "model": model,
+                        "weight": spec["weight"], "val_macro_f1": val_f1,
+                    })
+                else:
+                    state = torch.load(path, map_location="cpu")
+                    model, img_size = build_model(spec["arch"], pretrained=False)
+                    model.load_state_dict(state["model"] if "model" in state else state)
+                    model.eval().to(self.device)
+                    val_f1 = state.get("val_macro_f1")
+                    self.members.append({
+                        "name": spec["arch"], "kind": "cnn", "model": model,
+                        "transform": _build_transform(state.get("img_size", img_size)),
+                        "weight": spec["weight"], "val_macro_f1": val_f1,
+                    })
                 print(f"[FakeGuard] Ensemble member loaded: {spec['arch']} "
-                      f"(val_macro_f1={state.get('val_macro_f1', '?')})")
+                      f"(val_macro_f1={val_f1 if val_f1 is not None else '?'})")
             except Exception as exc:
                 print(f"[FakeGuard] Failed to load {spec['arch']}: {exc}")
 
@@ -131,15 +159,22 @@ class EnsembleDetector:
         b4_tensor = None    # kept for Grad-CAM, which needs B4's own input
 
         for member in self.members:
-            tensor = member["transform"](pil_img).unsqueeze(0).to(self.device)
-            if member["name"] == "efficientnet_b4":
-                b4_tensor = tensor
-
-            logits = (
-                tta_logits(member["model"], tensor)
-                if use_tta
-                else member["model"](tensor)
-            )
+            if member.get("kind") == "clip":
+                # CLIP has its own preprocessing (different normalization,
+                # no ImageNet transform) and is never fine-tuned, so it has
+                # no learned invariance to horizontal flip the way the CNNs
+                # do (see tta.py) — TTA is skipped for this member rather
+                # than assumed to transfer.
+                logits = member["model"].forward_pil(pil_img)
+            else:
+                tensor = member["transform"](pil_img).unsqueeze(0).to(self.device)
+                if member["name"] == "efficientnet_b4":
+                    b4_tensor = tensor
+                logits = (
+                    tta_logits(member["model"], tensor)
+                    if use_tta
+                    else member["model"](tensor)
+                )
             probs = F.softmax(logits.float() / self.temperature, dim=1).squeeze(0).cpu().numpy()
 
             member_probs.append(probs)

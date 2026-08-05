@@ -1,0 +1,9 @@
+{
+  "test": "SD1.4 held-out set (generate_diffusion_data.py::generate_holdout_test_set, n=30, seed_offset=90000, disjoint from train/val seed ranges)",
+  "caveat": "Same-family test only (SD1.4 is already in the CNN members' training distribution after the diffusion-blindspot fix). Does NOT test generalization to generator families absent from training (Flux, Midjourney v7, SDXL, Firefly) -- that is the case CLIP was added for, and it is unverified pending access to sample images from those generators.",
+  "2_member_cnn_only": {"correct": 29, "total": 30, "confidently_wrong": 0, "abstained": 1, "mean_epistemic_uncertainty": 0.0142},
+  "3_member_with_clip": {"correct": 30, "total": 30, "confidently_wrong": 0, "abstained": 0, "mean_epistemic_uncertainty": 0.0280},
+  "interpretation": "CLIP member converted the one previously-abstained image to a correct answer, and roughly doubled mean member disagreement (still far under the 0.35 abstain threshold) -- consistent with it genuinely contributing a different perspective rather than just riding along on the CNNs' votes.",
+  "clip_probe_val_macro_f1": 0.8476,
+  "pristine_450_sample_ensemble_eval": {"before_clip_forced_acc": 0.9644, "after_clip_forced_acc": 0.9733, "coverage_before": 0.967, "coverage_after": 0.962}
+}
