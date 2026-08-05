@@ -105,10 +105,20 @@ class CLIPFeatureExtractor:
     def _ensure_loaded(self):
         if self._model is not None:
             return
+        import transformers
         from transformers import CLIPVisionModelWithProjection, CLIPImageProcessor
 
-        self._processor = CLIPImageProcessor.from_pretrained(self.model_id)
-        model = CLIPVisionModelWithProjection.from_pretrained(self.model_id)
+        # The checkpoint is the full CLIP model but only the vision tower is
+        # wanted here, so every text_model.* weight is legitimately unused.
+        # transformers reports that as a 22-line "UNEXPECTED" table on first
+        # load, which looks like a failure in the server log and isn't one.
+        prev_verbosity = transformers.logging.get_verbosity()
+        transformers.logging.set_verbosity_error()
+        try:
+            self._processor = CLIPImageProcessor.from_pretrained(self.model_id)
+            model = CLIPVisionModelWithProjection.from_pretrained(self.model_id)
+        finally:
+            transformers.logging.set_verbosity(prev_verbosity)
         model.eval().to(self.device)
         for p in model.parameters():
             p.requires_grad = False  # frozen — see module docstring
