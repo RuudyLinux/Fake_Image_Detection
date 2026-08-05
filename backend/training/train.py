@@ -149,6 +149,13 @@ def main():
                          help="Backbone architecture. Ensemble members should differ.")
     parser.add_argument("--out",           default=None,
                          help="Checkpoint filename (defaults to <arch>_fake.pth).")
+    parser.add_argument("--save-all-dir",  default=None,
+                         help="If set, also save every epoch's checkpoint here (separate from "
+                              "the best-only checkpoint). Use when the save/early-stop gate "
+                              "(overall val macro_f1) can't see the sub-population you're "
+                              "actually trying to fix — e.g. a minority category too small to "
+                              "move the aggregate metric even when it genuinely improves. "
+                              "Lets a later per-category eval pick the right epoch instead.")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -201,6 +208,12 @@ def main():
         print(f"WARNING: writing back to the resumed checkpoint ({ckpt_path}). "
               f"Only strictly better epochs (> {best_f1:.4f}) will be saved.")
 
+    save_all_dir = None
+    if args.save_all_dir:
+        save_all_dir = Path(args.save_all_dir)
+        save_all_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Saving every epoch to {save_all_dir}/ (in addition to best-only {ckpt_path})")
+
     scaler = GradScaler()
     epochs_since_best = 0
     scheduler = None
@@ -238,6 +251,19 @@ def main():
         print()
         print_metrics("Train", train_m)
         print_metrics("Val  ", val_m, elapsed)
+
+        if save_all_dir:
+            epoch_ckpt = save_all_dir / f"{args.arch}_epoch{epoch}.pth"
+            torch.save({
+                "epoch": epoch,
+                "model": model.state_dict(),
+                "arch": args.arch,
+                "img_size": img_size,
+                "val_macro_f1": val_m["macro_f1"],
+                "val_acc": val_m["acc"],
+                "classes": CLASSES,
+            }, epoch_ckpt)
+            print(f"  (saved epoch checkpoint -> {epoch_ckpt})")
 
         if val_m["macro_f1"] > best_f1:
             best_f1 = val_m["macro_f1"]

@@ -14,6 +14,10 @@ backend/checkpoints/*
 # ...except the fitted calibration temperature: tiny, and without it the
 # ensemble silently falls back to an uncalibrated T=1.0.
 !backend/checkpoints/calibration.json
+# ...and per-category eval results: tiny JSON, and without these tracked,
+# "we improved X -> Y" claims aren't diffable against a prior commit.
+!backend/checkpoints/*_by_category.json
+!backend/checkpoints/*.metrics.json
 
 # Dataset (download via Kaggle)
 data/
