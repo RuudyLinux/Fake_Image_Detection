@@ -22,6 +22,16 @@ import sys
 import zipfile
 from pathlib import Path
 
+# Windows' default console codepage (cp1252/cp437) can't encode the box-
+# drawing characters verify() prints, and redirecting stdout to a file (as
+# the background training/download runs in this project do) doesn't get a
+# UTF-8-capable terminal to fall back on -- it raises UnicodeEncodeError and
+# kills the process after the real work (the download/organize) already
+# succeeded. Hit exactly this running download_indoor67() to a log file.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 
 EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
