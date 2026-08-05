@@ -110,30 +110,53 @@ def download_casia(output_dir: Path, max_per_split: int = 5000):
 
 
 def _organize_casia(dl_dir: Path, output_dir: Path, max_per_split: int):
-    """CASIA v2 contains Tp (tampered) and Au (authentic) folders."""
+    """
+    CASIA v2 contains Tp (tampered) and Au (authentic) folders. Both matter:
+
+    Tp -> edited class, as always.
+
+    Au -> real class, prefixed `casia_au_` so training/dataset.py's sampler
+    can recognize it as a distinct sub-domain and give it equal sampling
+    weight to the face-photo majority in `real`. Skipping Au here was a real,
+    measured bug: `real` and `ai_generated` ended up 100% face closeups (the
+    140k-faces dataset), while `edited` (from Tp) spans general photography --
+    architecture, nature, animals, scenes. The model learned "not a face ->
+    edited" as a shortcut having never seen a genuine unmanipulated non-face
+    photo. Confirmed directly: unrelated demo images (a tower, a cheetah, a
+    bus -- zero editing) were all classified EDITED at ~88% confidence.
+    """
     tampered_dirs = list(dl_dir.rglob("Tp")) + list(dl_dir.rglob("tampered"))
+    authentic_dirs = list(dl_dir.rglob("Au"))
+
     if not tampered_dirs:
         print("  WARNING: Could not find tampered images folder. Check extraction.")
-        return
+    if not authentic_dirs:
+        print("  WARNING: Could not find Au (authentic) folder -- 'real' will stay "
+              "face-only and this download will not fix the non-face false-positive bug.")
 
-    all_tampered = []
-    for d in tampered_dirs:
-        all_tampered.extend([f for f in d.rglob("*") if f.suffix.lower() in EXTENSIONS])
+    def _split_and_copy(files: list[Path], dst_class: str, prefix: str = ""):
+        random.shuffle(files)
+        split_idx = int(len(files) * 0.8)
+        splits = {"train": files[:split_idx], "val": files[split_idx:]}
+        for split, split_files in splits.items():
+            dst = output_dir / split / dst_class
+            dst.mkdir(parents=True, exist_ok=True)
+            chosen = split_files[:max_per_split]
+            for f in chosen:
+                shutil.copy2(f, dst / f"{prefix}{f.name}")
+            print(f"  -> {split}/{dst_class}: {len(chosen)} images")
 
-    random.shuffle(all_tampered)
-    split_idx = int(len(all_tampered) * 0.8)
-    splits = {
-        "train": all_tampered[:split_idx],
-        "val": all_tampered[split_idx:],
-    }
+    if tampered_dirs:
+        all_tampered = []
+        for d in tampered_dirs:
+            all_tampered.extend([f for f in d.rglob("*") if f.suffix.lower() in EXTENSIONS])
+        _split_and_copy(all_tampered, "edited")
 
-    for split, files in splits.items():
-        dst = output_dir / split / "edited"
-        dst.mkdir(parents=True, exist_ok=True)
-        chosen = files[:max_per_split]
-        for f in chosen:
-            shutil.copy2(f, dst / f.name)
-        print(f"  → {split}/edited: {len(chosen)} images")
+    if authentic_dirs:
+        all_authentic = []
+        for d in authentic_dirs:
+            all_authentic.extend([f for f in d.rglob("*") if f.suffix.lower() in EXTENSIONS])
+        _split_and_copy(all_authentic, "real", prefix="casia_au_")
 
     print("  CASIA organized.")
 

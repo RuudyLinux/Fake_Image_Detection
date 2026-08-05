@@ -163,11 +163,44 @@ class FakeImageDataset(Dataset):
             img = Image.new("RGB", (self.img_size, self.img_size), color=(128, 128, 128))
         return self.transform(img), torch.tensor(label, dtype=torch.long)
 
+    # Filename prefixes marking a distinct injected sub-domain within a class,
+    # so it can be given equal sampling weight to the majority data instead of
+    # being drowned out by it. Measured directly: CASIA "Au" (authentic,
+    # non-face) photos injected into `real` alongside 8000 face photos were
+    # outnumbered 2:1, and two full fine-tune rounds barely moved held-out
+    # accuracy on non-face photos (0 -> 17/40 -> 18/40) — the model kept
+    # seeing faces twice as often and the non-face concept never caught up.
+    SUBDOMAIN_PREFIXES = ("casia_au_", "sd14_")
+
     def make_sampler(self) -> WeightedRandomSampler:
-        """Balanced sampler: each class gets equal expected frequency per batch."""
-        labels = [lbl for _, lbl in self.paths]
+        """
+        Balanced sampler: equal expected frequency per class, AND within each
+        class, equal expected frequency per data-source sub-domain (see
+        SUBDOMAIN_PREFIXES). Class-only balancing leaves a minority sub-domain
+        proportionally starved even though its class is balanced.
+        """
         num_classes = len(CLASS_NAMES)
-        class_counts = [labels.count(c) for c in range(num_classes)]
-        class_weights = [1.0 / max(c, 1) for c in class_counts]
-        sample_weights = [class_weights[lbl] for lbl in labels]
+
+        def group_key(path: Path) -> str:
+            name = path.name
+            for prefix in self.SUBDOMAIN_PREFIXES:
+                if name.startswith(prefix):
+                    return prefix
+            return "base"
+
+        groups = [group_key(path) for path, _ in self.paths]
+        group_counts: dict[tuple, int] = {}
+        for (_, lbl), g in zip(self.paths, groups):
+            group_counts[(lbl, g)] = group_counts.get((lbl, g), 0) + 1
+
+        groups_per_class: dict[int, int] = {}
+        for (lbl, _g) in group_counts:
+            groups_per_class[lbl] = groups_per_class.get(lbl, 0) + 1
+
+        sample_weights = []
+        for (_, lbl), g in zip(self.paths, groups):
+            n_groups = groups_per_class[lbl]
+            group_size = group_counts[(lbl, g)]
+            sample_weights.append(1.0 / (num_classes * n_groups * group_size))
+
         return WeightedRandomSampler(sample_weights, num_samples=len(sample_weights), replacement=True)

@@ -72,7 +72,7 @@ def download_140k(tmp: Path, data: Path, max_per: int):
 
 
 def download_casia(tmp: Path, data: Path, max_per: int):
-    print("\n[2/3] Downloading CASIA v2 (edited images)...")
+    print("\n[2/3] Downloading CASIA v2 (edited + authentic images)...")
     dl = tmp / "dl_casia"
     dl.mkdir(parents=True, exist_ok=True)
     _run(["kaggle", "datasets", "download",
@@ -98,6 +98,31 @@ def download_casia(tmp: Path, data: Path, max_per: int):
     else:
         print("    CASIA Tp not found — using synthetic fallback (splice)")
         _make_synthetic_edited(data, max_per)
+
+    # Au (authentic) -> real, prefixed so training/dataset.py's sampler treats
+    # it as a distinct sub-domain deserving equal weight to the face-photo
+    # majority. Without this, `real` is 100% faces and `edited` spans general
+    # photography, so the model learns "not a face -> edited" -- measured
+    # directly on unrelated demo photos (tower/cheetah/bus, zero editing),
+    # all classified EDITED at ~88% confidence.
+    authentic = []
+    for d in dl.rglob("Au"):
+        if d.is_dir():
+            authentic += [f for f in d.rglob("*") if f.suffix.lower() in EXTS]
+
+    if authentic:
+        random.shuffle(authentic)
+        sp = int(len(authentic) * 0.8)
+        for split, files in [("train", authentic[:sp]), ("val", authentic[sp:])]:
+            dst = data / split / "real"
+            dst.mkdir(parents=True, exist_ok=True)
+            chosen = files[:max_per]
+            for f in chosen:
+                shutil.copy2(f, dst / f"casia_au_{f.name}")
+            print(f"    {split}/real (+casia_au_): {len(chosen):,}")
+    else:
+        print("    CASIA Au not found — `real` will stay face-only "
+              "(non-face false-positive bug will not be fixed)")
 
 
 def _make_synthetic_edited(data: Path, n: int):
@@ -146,7 +171,8 @@ def _write_metadata(upload_dir: Path, username: str):
         "description": (
             "3-class fake image detection dataset: REAL | AI_GENERATED | EDITED.\n"
             "Structure: train/ + val/ each with real/, ai_generated/, edited/ subfolders.\n"
-            "Sources: Flickr-Faces (real), StyleGAN/SD (AI), CASIA v2 (edited).\n"
+            "Sources: Flickr-Faces + CASIA v2 Au (real), StyleGAN/Stable Diffusion (AI), "
+            "CASIA v2 Tp (edited).\n"
             "Used by FakeGuard AI: https://github.com/RuudyLinux/Fake-Image-Detections"
         ),
     }
