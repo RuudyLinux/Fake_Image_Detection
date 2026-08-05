@@ -18,11 +18,20 @@ import argparse
 import subprocess
 import shutil
 import random
+import sys
 import zipfile
 from pathlib import Path
 
 
 EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+
+# Bare "kaggle" relies on the console-script shim being on PATH, which isn't
+# guaranteed (e.g. a venv not activated in the calling shell) — it fails with
+# FileNotFoundError, not a Kaggle API error, so the existing `except`-free
+# `check=False` + returncode check below never even sees it. Invoking the
+# module through the same interpreter that's running this script sidesteps
+# PATH entirely.
+KAGGLE_CMD = [sys.executable, "-m", "kaggle"]
 
 
 def _copy_images(src: Path, dst: Path, limit: int | None = None):
@@ -49,8 +58,8 @@ def download_140k(output_dir: Path, max_per_class: int = 10000):
     dl_dir.mkdir(parents=True, exist_ok=True)
 
     result = subprocess.run(
-        ["kaggle", "datasets", "download", "-d", "xhlulu/140k-real-and-fake-faces",
-         "-p", str(dl_dir), "--unzip"],
+        KAGGLE_CMD + ["datasets", "download", "-d", "xhlulu/140k-real-and-fake-faces",
+                      "-p", str(dl_dir), "--unzip"],
         check=False,
     )
 
@@ -92,8 +101,8 @@ def download_casia(output_dir: Path, max_per_split: int = 5000):
     dl_dir.mkdir(parents=True, exist_ok=True)
 
     result = subprocess.run(
-        ["kaggle", "datasets", "download", "-d", "sophatvathana/casia-dataset",
-         "-p", str(dl_dir), "--unzip"],
+        KAGGLE_CMD + ["datasets", "download", "-d", "sophatvathana/casia-dataset",
+                      "-p", str(dl_dir), "--unzip"],
         check=False,
     )
 
@@ -181,8 +190,8 @@ def download_indoor67(output_dir: Path, n_train: int = 800, n_val: int = 200):
     dl_dir.mkdir(parents=True, exist_ok=True)
 
     result = subprocess.run(
-        ["kaggle", "datasets", "download", "-d", "itsahmad/indoor-scenes-cvpr-2019",
-         "-p", str(dl_dir), "--unzip"],
+        KAGGLE_CMD + ["datasets", "download", "-d", "itsahmad/indoor-scenes-cvpr-2019",
+                      "-p", str(dl_dir), "--unzip"],
         check=False,
     )
     if result.returncode != 0:
@@ -217,9 +226,9 @@ def download_textocr(output_dir: Path, n_train: int = 800, n_val: int = 200):
     dl_dir.mkdir(parents=True, exist_ok=True)
 
     result = subprocess.run(
-        ["kaggle", "datasets", "download", "-d",
-         "robikscube/textocr-text-extraction-from-images-dataset",
-         "-p", str(dl_dir), "--unzip"],
+        KAGGLE_CMD + ["datasets", "download", "-d",
+                      "robikscube/textocr-text-extraction-from-images-dataset",
+                      "-p", str(dl_dir), "--unzip"],
         check=False,
     )
     if result.returncode != 0:
