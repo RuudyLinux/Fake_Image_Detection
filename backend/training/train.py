@@ -21,6 +21,17 @@ from torch.utils.data import DataLoader
 from torch.cuda.amp import GradScaler, autocast
 import numpy as np
 
+# Windows' default console codepage (cp1252) can't encode the checkmark/arrow
+# characters this script prints, and a backgrounded run with stdout
+# redirected to a log file doesn't get a UTF-8 terminal to fall back on --
+# it raises UnicodeEncodeError and kills the process mid-training, even
+# after that epoch's checkpoint already saved successfully. Killed a live
+# retrain right after epoch 1 this session (same bug already hit and fixed
+# in download_data.py).
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from models.cnn_model import build_model, CLASSES, NUM_CLASSES
 from training.dataset import FakeImageDataset

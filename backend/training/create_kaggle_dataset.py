@@ -25,6 +25,13 @@ import sys
 import random
 from pathlib import Path
 
+# See train.py / download_data.py for why: Windows' default console codepage
+# can't encode the checkmark/arrow characters this script prints, and a
+# redirected-to-file run has no UTF-8 terminal to fall back on.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 DATASET_SLUG = "fake-image-detection-dataset"
 METADATA_TEMPLATE = Path(__file__).parent.parent.parent / "kaggle_dataset" / "dataset-metadata.json"
