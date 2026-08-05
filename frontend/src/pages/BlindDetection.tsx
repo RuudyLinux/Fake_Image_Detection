@@ -1,9 +1,62 @@
-import { useState } from 'react';
-import { Search, Loader2, AlertCircle, Settings2 } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { ScanSearch, Loader2, AlertCircle, SlidersHorizontal, RotateCcw, Cpu } from 'lucide-react';
 import UploadZone from '../components/UploadZone';
 import BlindResultPanel from '../components/BlindResultPanel';
+import Reveal from '../components/Reveal';
 import { detectBlind } from '../api/detection';
 import type { BlindDetectionResult, DetectionStatus } from '../types';
+
+/** Purely cosmetic progress narration. The backend returns one response with
+ *  no progress stream, so these are timed locally — they describe the real
+ *  pipeline stages in order, but they are not live telemetry. */
+const STAGES = [
+  'Decoding image…',
+  'Running model ensemble…',
+  'Computing forensic signals…',
+  'Fusing evidence…',
+  'Estimating uncertainty…',
+];
+
+function AnalysingPanel() {
+  const [stage, setStage] = useState(0);
+
+  useEffect(() => {
+    const id = window.setInterval(
+      () => setStage((s) => Math.min(s + 1, STAGES.length - 1)),
+      900
+    );
+    return () => window.clearInterval(id);
+  }, []);
+
+  return (
+    <div className="card card-lit scanlines flex min-h-[22rem] flex-col items-center justify-center gap-6 overflow-hidden">
+      <div className="relative flex h-20 w-20 items-center justify-center">
+        <span className="absolute inset-0 rounded-full border border-violet-500/40 animate-pulse-ring" />
+        <span className="absolute inset-0 rounded-full border border-cyan-500/30 animate-pulse-ring animation-delay-500" />
+        <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-500 to-cyan-600">
+          <Cpu size={24} className="text-white" />
+        </span>
+      </div>
+
+      <div className="w-full max-w-xs space-y-2">
+        {STAGES.map((s, i) => (
+          <div
+            key={s}
+            className={`flex items-center gap-2.5 font-mono text-xs transition-all duration-500 ${
+              i < stage ? 'text-slate-500' : i === stage ? 'text-violet-300' : 'text-slate-700'
+            }`}
+          >
+            <span className={`h-1.5 w-1.5 flex-shrink-0 rounded-full transition-colors duration-500 ${
+              i < stage ? 'bg-emerald-500' : i === stage ? 'bg-violet-400 animate-pulse' : 'bg-slate-700'
+            }`} />
+            {s}
+            {i === stage && <span className="animate-blink">▋</span>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export default function BlindDetection() {
   const [file, setFile] = useState<File | null>(null);
@@ -16,6 +69,7 @@ export default function BlindDetection() {
   const [allowAbstain, setAllowAbstain] = useState(true);
 
   const options = { confidenceThreshold, enableGradcam, useTta, allowAbstain };
+  const analysing = status === 'analyzing';
 
   const handleAnalyze = async () => {
     if (!file) return;
@@ -23,12 +77,10 @@ export default function BlindDetection() {
     setError(null);
     setResult(null);
     try {
-      const data = await detectBlind(file, options);
-      setResult(data);
+      setResult(await detectBlind(file, options));
       setStatus('done');
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Analysis failed. Is the backend running?';
-      setError(message);
+      setError(err instanceof Error ? err.message : 'Analysis failed. Is the backend running?');
       setStatus('error');
     }
   };
@@ -40,164 +92,145 @@ export default function BlindDetection() {
     setStatus('idle');
   };
 
+  const toggles = [
+    { checked: enableGradcam, set: setEnableGradcam, label: 'Grad-CAM heatmap', hint: 'Visualise which regions drove the verdict.' },
+    { checked: useTta, set: setUseTta, label: 'Test-time augmentation', hint: 'Averages resample-free views. More accurate, slower.' },
+    { checked: allowAbstain, set: setAllowAbstain, label: 'Allow “uncertain” verdict', hint: 'Decline to answer rather than guess on ambiguous images.' },
+  ];
+
   return (
-    <div className="min-h-screen pt-24 pb-16 px-6">
-      <div className="max-w-5xl mx-auto">
-        {/* Header */}
-        <div className="mb-8">
-          <div className="flex items-center gap-2 text-purple-400 text-sm font-medium mb-2">
-            <Search size={14} /> Blind Detection
-          </div>
-          <h1 className="text-3xl font-bold text-slate-100">Detect Without Original</h1>
-          <p className="text-slate-400 mt-1">
-            Upload any image — CNN, FFT, and GAN models analyze it for manipulation signatures.
+    <div className="px-6 pb-24 pt-28">
+      <div className="mx-auto max-w-6xl">
+        <div className="mb-10 animate-fade-up">
+          <span className="eyebrow">
+            <ScanSearch size={12} /> Blind detection
+          </span>
+          <h1 className="mt-4 font-display text-4xl font-bold tracking-tight sm:text-5xl">
+            Detect without an <span className="gradient-text">original</span>
+          </h1>
+          <p className="mt-3 max-w-xl text-slate-400">
+            Upload a single image. Three models and six forensic signals analyse it
+            independently, then the evidence is fused into one calibrated verdict.
           </p>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-          {/* Upload panel */}
-          <div className="lg:col-span-2 space-y-4">
-            <div className="card space-y-4">
-              <UploadZone label="Upload Image" file={file} onFileChange={setFile} />
+        <div className="grid gap-6 lg:grid-cols-5">
+          {/* ---------- controls ---------- */}
+          <div className="space-y-5 lg:col-span-2">
+            <Reveal>
+              <div className="card card-lit space-y-4">
+                <UploadZone
+                  label="Input image"
+                  file={file}
+                  onFileChange={setFile}
+                  scanning={analysing}
+                />
 
-              <button
-                onClick={handleAnalyze}
-                disabled={!file || status === 'analyzing'}
-                className="btn-primary w-full justify-center"
-              >
-                {status === 'analyzing' ? (
-                  <>
-                    <Loader2 size={16} className="animate-spin" /> Analyzing…
-                  </>
-                ) : (
-                  <>
-                    <Search size={16} /> Analyze Image
-                  </>
-                )}
-              </button>
-
-              {result && (
-                <button onClick={handleReset} className="btn-secondary w-full justify-center text-sm">
-                  Reset
+                <button
+                  onClick={handleAnalyze}
+                  disabled={!file || analysing}
+                  className="btn-primary w-full"
+                >
+                  {analysing ? (
+                    <><Loader2 size={16} className="animate-spin" /> Analysing…</>
+                  ) : (
+                    <><ScanSearch size={16} /> Analyse image</>
+                  )}
                 </button>
-              )}
-            </div>
 
-            {/* Settings */}
-            <div className="card space-y-4">
-              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
-                <Settings2 size={12} /> Settings
-              </p>
-              <div>
-                <div className="flex items-center justify-between text-sm mb-1.5">
-                  <label htmlFor="confidence-threshold" className="text-slate-300">
-                    Confidence threshold
-                  </label>
-                  <span className="text-slate-200 font-semibold">
-                    {Math.round(confidenceThreshold * 100)}%
-                  </span>
-                </div>
-                <input
-                  id="confidence-threshold"
-                  type="range"
-                  min={0}
-                  max={100}
-                  value={Math.round(confidenceThreshold * 100)}
-                  onChange={(e) => setConfidenceThreshold(Number(e.target.value) / 100)}
-                  className="w-full accent-purple-500"
-                />
-                <p className="text-xs text-slate-600 mt-1">
-                  Verdicts below this confidence are flagged as low-confidence.
-                </p>
+                {(result || error) && (
+                  <button onClick={handleReset} className="btn-secondary w-full text-sm">
+                    <RotateCcw size={15} /> Reset
+                  </button>
+                )}
               </div>
-              <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={enableGradcam}
-                  onChange={(e) => setEnableGradcam(e.target.checked)}
-                  className="accent-purple-500"
-                />
-                Enable Grad-CAM heatmap
-              </label>
-              <div>
-                <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={useTta}
-                    onChange={(e) => setUseTta(e.target.checked)}
-                    className="accent-purple-500"
-                  />
-                  Test-time augmentation
-                </label>
-                <p className="text-xs text-slate-600 mt-0.5 ml-6">
-                  Averages several views. More accurate, slower.
-                </p>
-              </div>
-              <div>
-                <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={allowAbstain}
-                    onChange={(e) => setAllowAbstain(e.target.checked)}
-                    className="accent-purple-500"
-                  />
-                  Allow &ldquo;uncertain&rdquo; verdict
-                </label>
-                <p className="text-xs text-slate-600 mt-0.5 ml-6">
-                  Decline to answer rather than guess on ambiguous images.
-                </p>
-              </div>
-            </div>
+            </Reveal>
 
-            {/* Info card */}
-            <div className="card space-y-3">
-              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Models Used</p>
-              {[
-                { name: 'CNN Artifact Detector', desc: 'Compression artifacts, noise patterns' },
-                { name: 'FFT Frequency Analysis', desc: 'Unnatural frequency signatures' },
-                { name: 'GAN Fingerprint', desc: 'Generative model traces' },
-              ].map(({ name, desc }) => (
-                <div key={name} className="flex gap-3">
-                  <div className="w-1.5 h-1.5 rounded-full bg-purple-500 mt-1.5 flex-shrink-0" />
-                  <div>
-                    <p className="text-sm font-medium text-slate-300">{name}</p>
-                    <p className="text-xs text-slate-500">{desc}</p>
+            <Reveal delay={100}>
+              <div className="card space-y-5">
+                <p className="label-mono flex items-center gap-1.5">
+                  <SlidersHorizontal size={11} /> Settings
+                </p>
+
+                <div>
+                  <div className="mb-2 flex items-baseline justify-between">
+                    <label htmlFor="confidence-threshold" className="text-sm text-slate-300">
+                      Confidence threshold
+                    </label>
+                    <span className="font-mono text-sm font-semibold tabular-nums text-violet-300">
+                      {Math.round(confidenceThreshold * 100)}%
+                    </span>
                   </div>
+                  <input
+                    id="confidence-threshold"
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={Math.round(confidenceThreshold * 100)}
+                    onChange={(e) => setConfidenceThreshold(Number(e.target.value) / 100)}
+                    className="w-full"
+                  />
+                  <p className="mt-1.5 font-mono text-[10px] leading-relaxed text-slate-600">
+                    Verdicts below this are flagged as low-confidence.
+                  </p>
                 </div>
-              ))}
-            </div>
+
+                <div className="divider" />
+
+                {toggles.map(({ checked, set, label, hint }) => (
+                  <label key={label} className="group flex cursor-pointer gap-3">
+                    <span className="relative mt-0.5 flex-shrink-0">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(e) => set(e.target.checked)}
+                        className="peer sr-only"
+                      />
+                      <span className="block h-5 w-9 rounded-full bg-white/10 transition-colors duration-300 peer-checked:bg-gradient-to-r peer-checked:from-violet-500 peer-checked:to-cyan-500" />
+                      <span className="absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform duration-300 peer-checked:translate-x-4" />
+                    </span>
+                    <span>
+                      <span className="block text-sm text-slate-300 transition-colors group-hover:text-white">
+                        {label}
+                      </span>
+                      <span className="mt-0.5 block font-mono text-[10px] leading-relaxed text-slate-600">
+                        {hint}
+                      </span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </Reveal>
           </div>
 
-          {/* Results panel */}
+          {/* ---------- results ---------- */}
           <div className="lg:col-span-3">
             {status === 'idle' && (
-              <div className="card h-full min-h-64 flex flex-col items-center justify-center text-center gap-4 border-dashed">
-                <div className="w-16 h-16 rounded-full bg-dark-400 flex items-center justify-center">
-                  <Search size={28} className="text-dark-200" />
+              <Reveal delay={150}>
+                <div className="card flex min-h-[22rem] flex-col items-center justify-center gap-4 border-dashed text-center">
+                  <span className="flex h-16 w-16 items-center justify-center rounded-2xl border border-white/10 bg-white/[.03]">
+                    <ScanSearch size={26} className="text-slate-600" />
+                  </span>
+                  <div>
+                    <p className="font-medium text-slate-300">Awaiting input</p>
+                    <p className="mt-1 font-mono text-[11px] text-slate-600">
+                      Upload an image to begin analysis
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-slate-400 font-medium">No analysis yet</p>
-                  <p className="text-slate-600 text-sm">Upload an image and click Analyze</p>
-                </div>
-              </div>
+              </Reveal>
             )}
 
-            {status === 'analyzing' && (
-              <div className="card h-full min-h-64 flex flex-col items-center justify-center gap-4">
-                <Loader2 size={40} className="text-purple-500 animate-spin" />
-                <div className="text-center">
-                  <p className="text-slate-300 font-medium">Running models…</p>
-                  <p className="text-slate-500 text-sm">CNN · FFT · GAN fingerprint</p>
-                </div>
-              </div>
-            )}
+            {analysing && <AnalysingPanel />}
 
             {status === 'error' && (
-              <div className="card border-red-800/40 flex items-start gap-4">
-                <AlertCircle className="text-red-400 flex-shrink-0 mt-0.5" size={20} />
+              <div className="card animate-scale-in flex items-start gap-4 border-rose-500/30">
+                <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-rose-500/15">
+                  <AlertCircle className="text-rose-400" size={19} />
+                </span>
                 <div>
-                  <p className="font-semibold text-red-400">Analysis Failed</p>
-                  <p className="text-slate-400 text-sm mt-1">{error}</p>
+                  <p className="font-semibold text-rose-300">Analysis failed</p>
+                  <p className="mt-1 font-mono text-xs leading-relaxed text-slate-400">{error}</p>
                 </div>
               </div>
             )}

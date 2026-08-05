@@ -48,6 +48,15 @@ export interface BlindDetectionResult {
   };
 }
 
+export interface ComparativeEvidence {
+  /** Perceptual-hash distance indicates a real content change. */
+  hash_evidence: boolean;
+  /** Differences are concentrated in regions rather than spread diffusely. */
+  localized_evidence: boolean;
+  /** Human-readable justification, including the negative case. */
+  reasons: string[];
+}
+
 export interface ComparativeResult {
   similarity_score: number;
   is_manipulated: boolean;
@@ -56,6 +65,15 @@ export interface ComparativeResult {
   regions_count: number;
   phash_distance: number;
   dhash_distance: number;
+  /**
+   * Mean pixel difference inside the flagged regions over the mean outside.
+   * ~1 means the difference is spread evenly (re-compression / resizing);
+   * large values mean it is confined to specific regions (local editing).
+   * This is what the verdict keys on — SSIM magnitude alone cannot separate
+   * the two cases. Optional so an older backend still type-checks.
+   */
+  localization_ratio?: number;
+  evidence?: ComparativeEvidence;
 }
 
 export type DetectionStatus = 'idle' | 'uploading' | 'analyzing' | 'done' | 'error';

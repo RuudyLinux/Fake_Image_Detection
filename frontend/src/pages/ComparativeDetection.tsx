@@ -1,9 +1,17 @@
 import { useState } from 'react';
-import { GitCompare, Loader2, AlertCircle } from 'lucide-react';
+import { GitCompare, Loader2, AlertCircle, RotateCcw, ArrowDown } from 'lucide-react';
 import UploadZone from '../components/UploadZone';
 import ComparativeResultPanel from '../components/ComparativeResultPanel';
+import Reveal from '../components/Reveal';
 import { detectComparative } from '../api/detection';
 import type { ComparativeResult, DetectionStatus } from '../types';
+
+const TECHNIQUES = [
+  { name: 'Perceptual hashing', desc: 'pHash / dHash distance — survives resize and re-compression' },
+  { name: 'Structural similarity', desc: 'SSIM map over the aligned pair' },
+  { name: 'Localization ratio', desc: 'Separates local edits from diffuse compression noise' },
+  { name: 'Region contouring', desc: 'Bounds and highlights each altered area' },
+];
 
 export default function ComparativeDetection() {
   const [original, setOriginal] = useState<File | null>(null);
@@ -12,7 +20,8 @@ export default function ComparativeDetection() {
   const [result, setResult] = useState<ComparativeResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const canAnalyze = !!original && !!suspected && status !== 'analyzing';
+  const analysing = status === 'analyzing';
+  const canAnalyze = !!original && !!suspected && !analysing;
 
   const handleAnalyze = async () => {
     if (!original || !suspected) return;
@@ -20,12 +29,10 @@ export default function ComparativeDetection() {
     setError(null);
     setResult(null);
     try {
-      const data = await detectComparative(original, suspected);
-      setResult(data);
+      setResult(await detectComparative(original, suspected));
       setStatus('done');
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Comparison failed. Is the backend running?';
-      setError(message);
+      setError(err instanceof Error ? err.message : 'Comparison failed. Is the backend running?');
       setStatus('error');
     }
   };
@@ -39,105 +46,124 @@ export default function ComparativeDetection() {
   };
 
   return (
-    <div className="min-h-screen pt-24 pb-16 px-6">
-      <div className="max-w-5xl mx-auto">
-        {/* Header */}
-        <div className="mb-8">
-          <div className="flex items-center gap-2 text-blue-400 text-sm font-medium mb-2">
-            <GitCompare size={14} /> Comparative Detection
-          </div>
-          <h1 className="text-3xl font-bold text-slate-100">Compare With Original</h1>
-          <p className="text-slate-400 mt-1">
-            Upload the original and suspected fake — SSIM and pixel analysis pinpoint altered regions.
+    <div className="px-6 pb-24 pt-28">
+      <div className="mx-auto max-w-6xl">
+        <div className="mb-10 animate-fade-up">
+          <span className="eyebrow">
+            <GitCompare size={12} /> Comparative detection
+          </span>
+          <h1 className="mt-4 font-display text-4xl font-bold tracking-tight sm:text-5xl">
+            Compare with the <span className="gradient-text">original</span>
+          </h1>
+          <p className="mt-3 max-w-xl text-slate-400">
+            Upload both images. Localization-ratio analysis distinguishes a genuine edit
+            from harmless re-compression, then pinpoints exactly what changed.
           </p>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-          {/* Upload panel */}
-          <div className="lg:col-span-2 space-y-4">
-            <div className="card space-y-5">
-              <UploadZone label="Original Image" file={original} onFileChange={setOriginal} />
-              <div className="border-t border-dark-300" />
-              <UploadZone label="Suspected Fake Image" file={suspected} onFileChange={setSuspected} />
+        <div className="grid gap-6 lg:grid-cols-5">
+          {/* ---------- inputs ---------- */}
+          <div className="space-y-5 lg:col-span-2">
+            <Reveal>
+              <div className="card card-lit space-y-4">
+                <UploadZone
+                  label="Original image"
+                  file={original}
+                  onFileChange={setOriginal}
+                  scanning={analysing}
+                />
 
-              <button
-                onClick={handleAnalyze}
-                disabled={!canAnalyze}
-                className="btn-primary w-full justify-center"
-                style={{
-                  background: canAnalyze ? undefined : undefined,
-                  ...(canAnalyze
-                    ? { background: 'linear-gradient(135deg, #2563eb, #1d4ed8)' }
-                    : {}),
-                }}
-              >
-                {status === 'analyzing' ? (
-                  <>
-                    <Loader2 size={16} className="animate-spin" /> Comparing…
-                  </>
-                ) : (
-                  <>
-                    <GitCompare size={16} /> Compare Images
-                  </>
-                )}
-              </button>
-
-              {result && (
-                <button onClick={handleReset} className="btn-secondary w-full justify-center text-sm">
-                  Reset
-                </button>
-              )}
-            </div>
-
-            {/* Info */}
-            <div className="card space-y-3">
-              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Techniques</p>
-              {[
-                { name: 'SSIM Analysis', desc: 'Structural Similarity Index measuring' },
-                { name: 'Pixel Difference', desc: 'Absolute per-pixel deviation map' },
-                { name: 'Region Detection', desc: 'Contour-based altered area localization' },
-              ].map(({ name, desc }) => (
-                <div key={name} className="flex gap-3">
-                  <div className="w-1.5 h-1.5 rounded-full bg-blue-500 mt-1.5 flex-shrink-0" />
-                  <div>
-                    <p className="text-sm font-medium text-slate-300">{name}</p>
-                    <p className="text-xs text-slate-500">{desc}</p>
-                  </div>
+                <div className="flex items-center gap-3">
+                  <span className="h-px flex-1 bg-gradient-to-r from-transparent to-white/10" />
+                  <span className="flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/[.03]">
+                    <ArrowDown size={13} className="text-slate-500" />
+                  </span>
+                  <span className="h-px flex-1 bg-gradient-to-l from-transparent to-white/10" />
                 </div>
-              ))}
-            </div>
+
+                <UploadZone
+                  label="Suspected image"
+                  file={suspected}
+                  onFileChange={setSuspected}
+                  scanning={analysing}
+                  accent="cyan"
+                />
+
+                <button onClick={handleAnalyze} disabled={!canAnalyze} className="btn-primary w-full">
+                  {analysing ? (
+                    <><Loader2 size={16} className="animate-spin" /> Comparing…</>
+                  ) : (
+                    <><GitCompare size={16} /> Compare images</>
+                  )}
+                </button>
+
+                {(result || error) && (
+                  <button onClick={handleReset} className="btn-secondary w-full text-sm">
+                    <RotateCcw size={15} /> Reset
+                  </button>
+                )}
+              </div>
+            </Reveal>
+
+            <Reveal delay={100}>
+              <div className="card space-y-3.5">
+                <p className="label-mono">Techniques</p>
+                {TECHNIQUES.map(({ name, desc }, i) => (
+                  <div key={name} className="flex gap-3">
+                    <span className="mt-0.5 font-mono text-[10px] text-slate-600">0{i + 1}</span>
+                    <div>
+                      <p className="text-sm font-medium text-slate-300">{name}</p>
+                      <p className="mt-0.5 font-mono text-[10px] leading-relaxed text-slate-600">{desc}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Reveal>
           </div>
 
-          {/* Results */}
+          {/* ---------- results ---------- */}
           <div className="lg:col-span-3">
             {status === 'idle' && (
-              <div className="card h-full min-h-64 flex flex-col items-center justify-center text-center gap-4 border-dashed">
-                <div className="w-16 h-16 rounded-full bg-dark-400 flex items-center justify-center">
-                  <GitCompare size={28} className="text-dark-200" />
+              <Reveal delay={150}>
+                <div className="card flex min-h-[22rem] flex-col items-center justify-center gap-4 border-dashed text-center">
+                  <span className="flex h-16 w-16 items-center justify-center rounded-2xl border border-white/10 bg-white/[.03]">
+                    <GitCompare size={26} className="text-slate-600" />
+                  </span>
+                  <div>
+                    <p className="font-medium text-slate-300">Awaiting both images</p>
+                    <p className="mt-1 font-mono text-[11px] text-slate-600">
+                      Upload an original and a suspected copy
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-slate-400 font-medium">No comparison yet</p>
-                  <p className="text-slate-600 text-sm">Upload both images and click Compare</p>
-                </div>
-              </div>
+              </Reveal>
             )}
 
-            {status === 'analyzing' && (
-              <div className="card h-full min-h-64 flex flex-col items-center justify-center gap-4">
-                <Loader2 size={40} className="text-blue-500 animate-spin" />
+            {analysing && (
+              <div className="card card-lit scanlines flex min-h-[22rem] flex-col items-center justify-center gap-5 overflow-hidden">
+                <div className="relative flex h-20 w-20 items-center justify-center">
+                  <span className="absolute inset-0 rounded-full border border-cyan-500/40 animate-pulse-ring" />
+                  <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-500 to-violet-600">
+                    <GitCompare size={24} className="text-white" />
+                  </span>
+                </div>
                 <div className="text-center">
-                  <p className="text-slate-300 font-medium">Comparing images…</p>
-                  <p className="text-slate-500 text-sm">SSIM · Pixel diff · Region detection</p>
+                  <p className="font-medium text-slate-200">Comparing images…</p>
+                  <p className="mt-1 font-mono text-[11px] text-slate-500">
+                    hashing · SSIM · localization · contouring
+                  </p>
                 </div>
               </div>
             )}
 
             {status === 'error' && (
-              <div className="card border-red-800/40 flex items-start gap-4">
-                <AlertCircle className="text-red-400 flex-shrink-0 mt-0.5" size={20} />
+              <div className="card animate-scale-in flex items-start gap-4 border-rose-500/30">
+                <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-rose-500/15">
+                  <AlertCircle className="text-rose-400" size={19} />
+                </span>
                 <div>
-                  <p className="font-semibold text-red-400">Comparison Failed</p>
-                  <p className="text-slate-400 text-sm mt-1">{error}</p>
+                  <p className="font-semibold text-rose-300">Comparison failed</p>
+                  <p className="mt-1 font-mono text-xs leading-relaxed text-slate-400">{error}</p>
                 </div>
               </div>
             )}

@@ -5,9 +5,20 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>FakeGuard AI — Fake Image Detection</title>
+    <meta
+      name="description"
+      content="Calibrated AI image forensics. Detects AI-generated and edited images, and abstains when the evidence doesn't support a verdict."
+    />
+    <meta name="theme-color" content="#05050a" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+    <!-- Loaded here rather than via @import in index.css: a CSS @import is
+         discovered only after the stylesheet itself parses, which serialises
+         the font request behind it and causes a visible swap on first paint. -->
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
   </head>
   <body>
     <div id="root"></div>

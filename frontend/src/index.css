@@ -1,53 +1,294 @@
+/* Fonts are loaded from index.html, not @import-ed here — see the comment on
+   that <link> for why (an @import serialises the request behind this
+   stylesheet's own parse and causes a visible swap on first paint). */
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 
 @layer base {
   * {
     box-sizing: border-box;
   }
 
+  html {
+    scroll-behavior: smooth;
+  }
+
   body {
-    background-color: #0a0a0f;
-    color: #e2e8f0;
+    background-color: #05050a;
+    color: #dcdcf0;
     font-family: 'Inter', system-ui, sans-serif;
     min-height: 100vh;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
   }
 
-  ::-webkit-scrollbar {
-    width: 6px;
+  /* Every motion effect in this file is decorative. Users who ask the OS for
+     reduced motion get the full UI with the movement removed, not a degraded
+     layout. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: .001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: .001ms !important;
+      scroll-behavior: auto !important;
+    }
   }
 
-  ::-webkit-scrollbar-track {
-    background: #0f0f1a;
-  }
-
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: #08080f; }
   ::-webkit-scrollbar-thumb {
-    background: #6b21a8;
-    border-radius: 3px;
+    background: linear-gradient(180deg, #7c3aed, #0899b5);
+    border-radius: 99px;
+    border: 2px solid #08080f;
   }
+  ::-webkit-scrollbar-thumb:hover { background: linear-gradient(180deg, #9a6dff, #0ec3e0); }
+
+  ::selection { background: rgba(124, 58, 237, .4); color: #fff; }
 }
 
 @layer components {
+  /* ---------- surfaces ---------- */
+
   .card {
-    @apply bg-dark-600 border border-dark-300 rounded-2xl p-6;
+    @apply relative rounded-2xl border border-white/[.07] p-6;
+    background: linear-gradient(160deg, rgba(28, 28, 51, .62), rgba(11, 11, 22, .78));
+    -webkit-backdrop-filter: blur(14px);
+    backdrop-filter: blur(14px);
+    box-shadow: 0 1px 0 0 rgba(255, 255, 255, .05) inset, 0 20px 50px -24px rgba(0, 0, 0, .9);
   }
+
+  /* Hairline gradient top edge — reads as a lit surface without a heavy border. */
+  .card-lit::before {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(154, 109, 255, .75), rgba(56, 220, 245, .5), transparent);
+    border-radius: inherit;
+  }
+
+  .card-hover {
+    @apply transition-all duration-500;
+  }
+  .card-hover:hover {
+    border-color: rgba(154, 109, 255, .35);
+    box-shadow: 0 1px 0 0 rgba(255, 255, 255, .07) inset,
+                0 28px 70px -28px rgba(124, 58, 237, .55);
+    transform: translateY(-4px);
+  }
+
+  /* ---------- buttons ---------- */
 
   .btn-primary {
-    @apply bg-purple-600 hover:bg-purple-700 text-white font-semibold px-6 py-3 rounded-xl transition-all duration-200 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply relative inline-flex items-center justify-center gap-2 overflow-hidden rounded-xl px-6 py-3
+           font-semibold text-white transition-all duration-300
+           disabled:cursor-not-allowed disabled:opacity-40 disabled:saturate-50;
+    background: linear-gradient(120deg, #7c3aed, #9a6dff 45%, #0899b5);
+    background-size: 200% 100%;
+    box-shadow: 0 10px 30px -12px rgba(124, 58, 237, .9);
   }
+  .btn-primary:hover:not(:disabled) {
+    background-position: 100% 0;
+    box-shadow: 0 16px 40px -12px rgba(124, 58, 237, 1);
+    transform: translateY(-2px);
+  }
+  .btn-primary:active:not(:disabled) { transform: translateY(0); }
+
+  /* Light sweep on hover. Pointer-events off so it never eats the click. */
+  .btn-primary::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, .35), transparent 80%);
+    transform: translateX(-120%);
+    transition: transform .7s cubic-bezier(.22, 1, .36, 1);
+  }
+  .btn-primary:hover:not(:disabled)::after { transform: translateX(120%); }
 
   .btn-secondary {
-    @apply bg-dark-400 hover:bg-dark-300 text-slate-200 font-medium px-6 py-3 rounded-xl transition-all duration-200 border border-dark-300;
+    @apply inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 px-6 py-3
+           font-medium text-slate-200 transition-all duration-300
+           hover:border-violet-500/40 hover:bg-white/[.05] hover:text-white
+           disabled:cursor-not-allowed disabled:opacity-40;
+    background: rgba(255, 255, 255, .03);
   }
 
-  .glow-purple {
-    box-shadow: 0 0 30px rgba(168, 85, 247, 0.15);
+  .btn-ghost {
+    @apply inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm text-slate-400
+           transition-colors duration-200 hover:bg-white/5 hover:text-white;
   }
+
+  /* ---------- text ---------- */
 
   .gradient-text {
-    @apply bg-gradient-to-r from-purple-400 to-purple-600 bg-clip-text text-transparent;
+    background: linear-gradient(100deg, #d0bcff, #9a6dff 40%, #38dcf5);
+    background-size: 200% auto;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: gradient-pan 8s ease infinite;
   }
+
+  .eyebrow {
+    @apply inline-flex items-center gap-2 rounded-full border border-violet-500/25 bg-violet-500/10
+           px-3.5 py-1.5 font-mono text-[11px] uppercase tracking-[.18em] text-violet-300;
+  }
+
+  .label-mono {
+    @apply font-mono text-[10px] uppercase tracking-[.2em] text-slate-500;
+  }
+
+  /* ---------- decorative ---------- */
+
+  .grid-bg {
+    background-image:
+      linear-gradient(rgba(154, 109, 255, .055) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(154, 109, 255, .055) 1px, transparent 1px);
+    background-size: 56px 56px;
+  }
+
+  /* Horizontal CRT-style banding. Very low contrast on purpose: it should
+     register as texture, not as stripes competing with the content. */
+  .scanlines::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      to bottom,
+      transparent 0 2px,
+      rgba(255, 255, 255, .022) 2px 3px
+    );
+    border-radius: inherit;
+  }
+
+  .noise::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: .16;
+    border-radius: inherit;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 220 220' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  .glow-violet { box-shadow: 0 0 60px -12px rgba(124, 58, 237, .55); }
+  .glow-cyan   { box-shadow: 0 0 60px -12px rgba(14, 195, 224, .45); }
+
+  .divider {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .1), transparent);
+  }
+}
+
+@layer utilities {
+  .animation-delay-100 { animation-delay: .1s; }
+  .animation-delay-200 { animation-delay: .2s; }
+  .animation-delay-300 { animation-delay: .3s; }
+  .animation-delay-500 { animation-delay: .5s; }
+  .animation-delay-700 { animation-delay: .7s; }
+
+  .text-balance { text-wrap: balance; }
+
+  .mask-fade-b {
+    -webkit-mask-image: linear-gradient(to bottom, black 55%, transparent);
+    mask-image: linear-gradient(to bottom, black 55%, transparent);
+  }
+}
+
+/* ---------- glitch ----------
+   Two clipped copies of the text offset in opposite directions on the red and
+   cyan channels — the classic chromatic-aberration tear. Fits the product:
+   this is what a corrupted image actually looks like. Hover-only so it never
+   interferes with reading. */
+
+.glitch {
+  position: relative;
+  display: inline-block;
+}
+.glitch::before,
+.glitch::after {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .2s;
+  background: inherit;
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+.glitch:hover::before,
+.glitch:hover::after { opacity: .85; }
+.glitch:hover::before {
+  color: #ff2e6a;
+  transform: translate(-2px, -1px);
+  clip-path: polygon(0 0, 100% 0, 100% 46%, 0 46%);
+  animation: glitch-a .45s steps(2, end) infinite;
+}
+.glitch:hover::after {
+  color: #38dcf5;
+  transform: translate(2px, 1px);
+  clip-path: polygon(0 54%, 100% 54%, 100% 100%, 0 100%);
+  animation: glitch-b .45s steps(2, end) infinite;
+}
+@keyframes glitch-a {
+  0%, 100% { transform: translate(-2px, -1px); }
+  50%      { transform: translate(2px, 1px); }
+}
+@keyframes glitch-b {
+  0%, 100% { transform: translate(2px, 1px); }
+  50%      { transform: translate(-2px, -1px); }
+}
+
+/* ---------- scroll reveal (driven by components/Reveal.tsx) ---------- */
+
+.reveal {
+  opacity: 0;
+  transform: translateY(26px);
+  transition: opacity .8s cubic-bezier(.22, 1, .36, 1),
+              transform .8s cubic-bezier(.22, 1, .36, 1);
+  will-change: opacity, transform;
+}
+.reveal.is-visible {
+  opacity: 1;
+  transform: none;
+}
+
+/* ---------- range input ---------- */
+
+input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, .08);
+  outline: none;
+}
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  cursor: pointer;
+  background: linear-gradient(135deg, #9a6dff, #38dcf5);
+  border: 2px solid #08080f;
+  box-shadow: 0 0 0 3px rgba(154, 109, 255, .25);
+  transition: transform .2s, box-shadow .2s;
+}
+input[type='range']::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+  box-shadow: 0 0 0 5px rgba(154, 109, 255, .3);
+}
+input[type='range']::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  cursor: pointer;
+  background: linear-gradient(135deg, #9a6dff, #38dcf5);
+  border: 2px solid #08080f;
 }
