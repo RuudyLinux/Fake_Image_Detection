@@ -59,16 +59,17 @@ see git history, fix 5da4bae).
 
 ```
 data/
-  train/  real=11,999  ai_generated=8,800  edited=4,835   total=25,634
-  val/    real=3,001   ai_generated=2,200  edited=1,209   total=6,410
+  train/  real=13,597  ai_generated=8,800  edited=4,835   total=27,232
+  val/    real=3,401   ai_generated=2,200  edited=1,209   total=6,810
 ```
 
 `real` and `ai_generated` each mix a face-photo majority with an injected
-non-face sub-domain (`casia_au_*`, `sd14_*`). `edited` (CASIA v2 Tp) has its
-own internal tamper-type split (`Tp_S`/`Tp_D`/`Sp_S`/`Sp_D`). All of these are
-balanced by [training/dataset.py](backend/training/dataset.py)'s
+non-face sub-domain (`casia_au_*`, `sd14_*`, plus `indoor67_*`/`textocr_*`
+merged into the `casia_au_ind`/`casia_au_txt` buckets). `edited` (CASIA v2 Tp)
+has its own internal tamper-type split (`Tp_S`/`Tp_D`/`Sp_S`/`Sp_D`). All of
+these are balanced by [training/dataset.py](backend/training/dataset.py)'s
 `make_sampler()` — see [Honest Status](#honest-status--known-limitations) for
-why that had to be fixed twice, at two different granularities.
+why that had to be fixed three times, at increasing granularity each time.
 
 ### Training setup
 
@@ -128,9 +129,9 @@ SQLite history ([backend/history.db](backend/history.db)).
 
 ## Honest Status — known limitations
 
-This section exists because "it works" claims in this project have twice
-turned out to be measurement gaps, not fixed bugs — recorded here so the
-next person (or session) doesn't have to rediscover them.
+This section exists because "it works" claims in this project have
+repeatedly turned out to be measurement gaps, not fixed bugs — recorded
+here so the next person (or session) doesn't have to rediscover them.
 
 1. **Non-face REAL photos were misclassified EDITED at ~88% confidence,
    every time.** Root cause: REAL and AI_GENERATED were 100% face closeups;
@@ -166,40 +167,65 @@ next person (or session) doesn't have to rediscover them.
    one unchanged member — forcing parity would reduce the disagreement signal
    abstention depends on, for no accuracy gain.
 
-4. **txt (79 unique images) and ind (186) are CASIA's entire authentic pool
-   for those categories — not a subsample.** Oversampling already extracts
-   what's available (each txt image now sampled ~7.4x more per epoch); the
-   real ceiling is more source images, not more training. This is the next
-   open item — see below.
+   (B4's own numbers above are from that point in the session, not current —
+   see item 5 for where they ended up after the next retrain.)
 
-5. **EDITED's F1 dropped 0.997→0.819 after fix #1, and further on B4 after
-   fix #2** (edited/Tp_S 0.866→0.665). The original high number was inflated
-   by the same shortcut that broke non-face REAL — non-face-topic was a free
-   tell for CASIA's tampered set too. The model now has to learn actual
-   splice cues instead of guessing by subject matter; it's measurably worse
-   at that than the old, shortcut-inflated number suggested.
+4. **txt (79) and ind (186) were CASIA's entire authentic pool for those
+   categories — not a subsample.** Fixed by growing the source data itself:
+   MIT Indoor67 (+798) and TextOCR (+800) injected as `indoor67_`/`textocr_`,
+   merged into the same sampler bucket as `casia_au_ind`/`casia_au_txt`
+   (not a new parallel group — see `dataset.py`'s `_CATEGORY_ALIASES`).
+   Retrained EfficientNet-B4 on the enlarged pool (epoch9 promoted): real/txt
+   0.623→0.886, real/ind 0.595→0.915 (measured against the old model
+   zero-shot on the new data as baseline, since the val set grew too).
+   Unlike the category-balancing retrain, every one of the 10 saved epochs
+   beat baseline this round, and the aggregate val macro_f1 gate agreed with
+   the per-category verdict for once.
+
+5. **EDITED's majority tamper type keeps eroding, across both rounds of the
+   non-face fix, and it hasn't leveled off yet:**
+   edited/Tp_S (647 val images, the largest EDITED group) — 0.866 (original,
+   shortcut-inflated) → 0.665 (after category-balancing) → **0.573** (after
+   growing txt/ind). The model's own CNN signal now misses ~43% of the most
+   common splice type. `fusion.py`'s ELA/pHash heuristics backstop EDITED
+   detection independent of the CNN, so this isn't the whole system's EDITED
+   recall — but the CNN member's contribution has roughly halved across two
+   promotions moving in the same direction, and nothing in this arc has
+   addressed the actual cause (EDITED's own training diversity, all from
+   CASIA's synthetic splice ops). This is now the top open risk, not a
+   footnote — see Immediate Next Steps #1.
 
 6. Live model checkpoints (`backend/checkpoints/*.pth`) are **not** tracked
    in git (too large). The only rollback path after a promotion is whatever
    local backup file was kept at promotion time
-   (e.g. `efficientnet_b4_fake_pre_v2_backup.pth`) — these backups don't
+   (e.g. `efficientnet_b4_fake_pre_v3_backup.pth`) — these backups don't
    survive a fresh clone.
 
 ## Immediate Next Steps
 
-1. **Grow txt/ind source data.** CASIA's Au split is exhausted for these
-   categories; need a new authentic-photo source (candidates: MIT
-   Indoor67 / Places365 subset for `ind`, ICDAR-style scene-text photos for
-   `txt`) via Kaggle, integrated the same way CASIA's Au was — new
-   `SUBDOMAIN_PREFIXES` entry, sampler-balanced, then retrained and
-   evaluated per-category before promoting.
-2. Re-run `evaluate_by_category.py` after any retrain — the aggregate
-   metrics have already hidden a real result once (EfficientNet-B4 epoch3)
-   and a real non-result once (ConvNeXt); don't trust the aggregate alone
-   again.
-3. Consider whether EDITED needs real-world (non-CASIA-synthetic) tampering
-   examples — CASIA's splice ops may not represent what an actual malicious
-   edit (Photoshop retouch, AI inpaint) looks like as well as its own held-out
-   set suggests.
+1. **EDITED/Tp_S recall has dropped in the same direction across two
+   consecutive promotions (0.866→0.665→0.573) — don't promote a third
+   round in this direction without addressing it first.** Likely needs
+   EDITED's own training diversity grown the same way real/txt and real/ind
+   just were (CASIA's Tp split is 100% synthetic splice/copy-move — real-world
+   tampering, e.g. Photoshop retouch or AI inpainting, may not share the same
+   cues its own held-out set rewards). Growing that pool, not further
+   real-side rebalancing, is the next real fix.
+2. ConvNeXt-tiny is still the original, untouched checkpoint (never promoted —
+   see Honest Status #3). Worth a third attempt now that real/txt and
+   real/ind have more source diversity, not just more oversampling of the
+   same thin pool that made ConvNeXt's trade-off unfavorable last time.
+3. Re-run `evaluate_by_category.py` after any retrain, against a **freshly
+   re-measured** baseline if the val set composition changed — the aggregate
+   metrics have already hidden a real result once, hidden a real non-result
+   once, and once actually agreed with the per-category verdict. Don't
+   assume which one it'll be.
 4. Recalibrate (`fit_calibration.py`) after every checkpoint promotion —
    stale calibration on a shifted model silently miscalibrates confidence.
+5. `subprocess.run(["kaggle", ...])` and Unicode status characters
+   (`✓ → ─`) in print output both crashed background runs this session on
+   Windows (bare command not on PATH; console codepage can't encode the
+   characters when stdout is redirected to a log file). Fixed in
+   `download_data.py`, `train.py`, `create_kaggle_dataset.py` — check any
+   *new* training/data script for the same two patterns before backgrounding
+   it, they aren't obviously related until they bite.
