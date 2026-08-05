@@ -1,7 +1,7 @@
 {
-  "temperature": 0.6603774428367615,
-  "ece_before": 0.05493135071023951,
-  "ece_after": 0.01059167452051933,
+  "temperature": 0.6749534606933594,
+  "ece_before": 0.05036229747682588,
+  "ece_after": 0.01610546470913771,
   "members": [
     "efficientnet_b4",
     "convnext_tiny"
