@@ -46,14 +46,16 @@ flowchart TB
 
     subgraph Ens[" "]
         direction TB
-        EnsTitle["① CNN Ensemble — models/ensemble.py"]
-        B4["EfficientNet-B4 · 380px\nweight 0.6"]
-        CN["ConvNeXt-Tiny · 224px\nweight 0.4"]
-        TTA["TTA: resample-free views\nmodels/tta.py"]
-        Cal["temperature scaling\ncheckpoints/calibration.json"]
+        EnsTitle["① Ensemble — models/ensemble.py"]
+        B4["EfficientNet-B4 · 380px\nweight 0.5 · fine-tuned"]
+        CN["ConvNeXt-Tiny · 224px\nweight 0.3 · fine-tuned"]
+        CL["CLIP ViT-L/14 + linear probe\nweight 0.2 · backbone FROZEN"]
+        TTA["TTA: resample-free views\nmodels/tta.py\n(CNN members only)"]
+        Cal["temperature scaling\ncheckpoints/calibration.json\n(fitted on CNN members only)"]
         B4 --> TTA
         CN --> TTA
         TTA --> Cal
+        CL --> Unc
         Cal --> Unc["uncertainty decomposition\naleatoric + epistemic (MI)"]
     end
 
@@ -82,23 +84,44 @@ flowchart TB
     GC --> Out
 ```
 
-### ① CNN Ensemble — the primary signal
+### ① Ensemble — the primary signal
 
-Two independently-trained models, deliberately different architectures at
-different input resolutions, so they fail on different inputs instead of
-sharing blind spots:
+Three members, two fine-tuned CNNs plus one frozen foundation-model probe,
+deliberately different from each other so they fail on different inputs
+instead of sharing blind spots:
 
-| Model | Resolution | Weight | Why this weight |
-|---|---|---|---|
-| EfficientNet-B4 | 380px | 0.6 | finer input detail → more forensic signal retained |
-| ConvNeXt-Tiny | 224px | 0.4 | secondary vote, catches what B4 misses |
+| Model | Resolution | Weight | Training | Why |
+|---|---|---|---|---|
+| EfficientNet-B4 | 380px | 0.5 | fine-tuned end-to-end | finer input detail → more forensic signal retained |
+| ConvNeXt-Tiny | 224px | 0.3 | fine-tuned end-to-end | secondary vote, decorrelated errors from B4 |
+| CLIP ViT-L/14 + linear probe | 224px | 0.2 | **backbone frozen**, only a linear head trains | generalization to generators absent from this project's training data — see below |
 
-Each member runs **test-time augmentation** (resample-free views only — a
-lesson learned the hard way: augmented views that resample the image push it
-out of the classifier's input distribution and *reduce* accuracy, see git
-history `5da4bae`). Logits are weight-averaged, then passed through a fitted
-**temperature scaling** factor (`calibration.json`) so the reported
-confidence reflects real accuracy, not raw softmax overconfidence.
+The two CNNs are fine-tuned on this project's training set, which teaches them
+*that set's* generators' artifacts (StyleGAN, Stable Diffusion 1.4/2.1).
+Measured directly in this project (`training/generate_diffusion_data.py`):
+before a generator was added to training, both CNN members failed on it
+**identically** — 25/30 confidently wrong, near-zero disagreement — because
+fine-tuning teaches generator-specific fingerprints, not a general "is this
+synthetic" concept. The CLIP member exists to break that pattern: its backbone
+is never fine-tuned, so it encodes a broad prior over natural-image statistics
+learned from hundreds of millions of images, rather than this project's
+specific generator set. It runs at a materially lower val macro-F1 in-
+distribution (0.85 vs. the CNNs' 0.86-0.90) — expected, a linear probe is a
+weaker fit to *this* training set by design — but it fails differently enough
+from the CNNs to add real signal: on a controlled A/B (`clip_member_ab_test.
+metrics.json`), adding it converted one previously-abstained held-out
+detection to correct and roughly doubled mean member disagreement, meaning it
+is measurably contributing a different perspective, not just riding along.
+
+The two CNN members run **test-time augmentation** (resample-free views only
+— a lesson learned the hard way: augmented views that resample the image push
+it out of the classifier's input distribution and *reduce* accuracy, see git
+history `5da4bae`). Their logits are weight-averaged, then passed through a
+fitted **temperature scaling** factor (`calibration.json`) so the reported
+confidence reflects real accuracy, not raw softmax overconfidence. The CLIP
+member currently runs under that same shared temperature as an approximation
+— `fit_calibration.py` doesn't yet fit it separately, a known gap flagged in
+that file's code, not silent.
 
 **Uncertainty isn't one number.** The ensemble decomposes predictive entropy
 into:
@@ -169,18 +192,32 @@ human reviewer needs to look closest.
 flowchart LR
     O["original image"] --> Hash["pHash + dHash\ndistance"]
     S["suspected image"] --> Hash
-    O --> ELA["ELA diff map"]
-    S --> ELA
-    Hash --> Dec{"manipulated?\nscore < 0.95 OR\nsignificant regions OR\nphash_distance > 10"}
-    ELA --> Dec
-    Dec --> Out["is_manipulated, similarity_score,\nphash/dhash distance, diff/highlight map"]
+    O --> SSIM["SSIM diff map\n+ contour regions"]
+    S --> SSIM
+    SSIM --> Loc["localization ratio\ndiff-inside-regions ÷ diff-outside"]
+    Hash --> Dec{"manipulated?\nphash>10 OR dhash>12\nOR (regions AND ratio≥20)"}
+    Loc --> Dec
+    Dec --> Out["is_manipulated, similarity_score,\nlocalization_ratio, evidence + reasons,\ndiff/highlight map"]
 ```
 
 No trained model here — pure signal comparison
 (`models/comparative_detector.py`). Perceptual hash distance catches
-structural changes; the ELA diff localizes *where* pixels were
-re-compressed differently, which is what actually gets drawn as the
-highlighted region.
+structural content changes; the diff map's **localization ratio** —  mean
+pixel difference inside the flagged regions vs. outside them — separates
+genuine local edits from harmless re-compression, which SSIM magnitude alone
+cannot do.
+
+This replaced an OR of three loose thresholds (`score < 0.95 OR any region OR
+phash > 10`) that measured 81.6% false-alarm rate on 250 authentic CASIA
+images against their own re-compressed copies — a plain JPEG re-save tripped
+it almost every time, because SSIM does not separate "re-compressed" from
+"edited" (a genuine splice measured SSIM 0.955 while a clean q=30 re-save of
+the *same* image measured 0.933 — worse). What does separate them is *where*
+the difference sits: re-compression spreads error diffusely across the whole
+image, editing concentrates it. Localization ratio measures exactly that;
+validated on 3396 real CASIA forgery/authentic pairs (recovered from CASIA's
+own filenames): forgery recall 95.6%, false-alarm rate 0.0%, F1 0.978 (up
+from 0.703).
 
 ## 5. Serving stack
 
@@ -242,23 +279,25 @@ backend/
   routers/detect.py       /detect/blind, /detect/compare, /history, .../report
   db.py                   SQLite history persistence
   models/
-    ensemble.py           2-model weighted ensemble, calibration, abstention
+    ensemble.py           3-model weighted ensemble, calibration, abstention
+    clip_detector.py      frozen CLIP vision tower + linear probe (3rd member)
     blind_detector.py     orchestrates heuristics + ensemble → verdict
-    comparative_detector.py   pHash/dHash + ELA pairwise comparison
+    comparative_detector.py   pHash/dHash + SSIM localization-ratio comparison
     fusion.py              CNN + heuristic probability blending
     gradcam.py             Grad-CAM heatmap generation
-    tta.py                  test-time augmentation views
+    tta.py                  test-time augmentation views (CNN members only)
     cnn_model.py            model architectures (EfficientNet-B4, ConvNeXt-Tiny)
     calibration.py          temperature scaling load/apply
   training/
     dataset.py              FakeImageDataset + balanced sampler
-    train.py                two-phase fine-tuning loop
+    train.py                two-phase fine-tuning loop (CNN members)
+    train_clip_probe.py     extract frozen CLIP features, fit linear probe
     evaluate.py, evaluate_ensemble.py, evaluate_by_category.py,
     robustness_eval.py       metrics tooling
-    fit_calibration.py       temperature fitting
+    fit_calibration.py       temperature fitting (CNN members only — see §3①)
     download_data.py         Kaggle dataset acquisition + organization
   checkpoints/               *.pth (gitignored) + calibration.json,
-                              *_by_category.json (tracked — see .gitignore)
+                              *_by_category.json, *.metrics.json (tracked)
   reports/pdf_report.py       PDF export
 frontend/
   src/pages/                 Home, BlindDetection, ComparativeDetection, History
@@ -271,9 +310,10 @@ frontend/
 | Layer | Tech |
 |---|---|
 | Model training | PyTorch, AMP, torchvision |
-| Model architectures | EfficientNet-B4, ConvNeXt-Tiny (both ImageNet-pretrained, fine-tuned) |
+| Model architectures | EfficientNet-B4, ConvNeXt-Tiny (fine-tuned) + CLIP ViT-L/14 (frozen, linear probe only) |
 | Backend | FastAPI, Uvicorn, SQLite |
 | Image / signal processing | Pillow, OpenCV, scikit-image, SciPy, ImageHash |
+| Foundation model | transformers (CLIPVisionModelWithProjection) |
 | Reports | ReportLab (PDF) |
 | Frontend | React, Vite, TypeScript, Tailwind CSS, axios |
 | Dataset acquisition | Kaggle API |

@@ -18,25 +18,31 @@ calibrated, honestly-uncertain output.
 
 ## Architecture (as built)
 
-### Trained models — 2, ensembled
+### Models — 3, ensembled
 
-| Model | Weight | Input | Role |
-| --- | --- | --- | --- |
-| EfficientNet-B4 | 0.6 | 380px | primary |
-| ConvNeXt-Tiny | 0.4 | 224px | secondary — deliberately kept architecturally distinct so the pair disagrees on genuinely ambiguous images instead of sharing blind spots |
+| Model | Weight | Input | Training | Role |
+| --- | --- | --- | --- | --- |
+| EfficientNet-B4 | 0.5 | 380px | fine-tuned | primary |
+| ConvNeXt-Tiny | 0.3 | 224px | fine-tuned | secondary — deliberately kept architecturally distinct so the pair disagrees on genuinely ambiguous images instead of sharing blind spots |
+| CLIP ViT-L/14 + linear probe | 0.2 | 224px | **backbone frozen**, only the head trains | generalization to generators outside this project's training data — the two fine-tuned CNNs learn *this project's* generators' artifacts, not a general synthetic-vs-real concept (measured directly: both shared an identical blind spot on Stable Diffusion before it was added to training — see [generate_diffusion_data.py](backend/training/generate_diffusion_data.py)) |
 
 Ensemble ([backend/models/ensemble.py](backend/models/ensemble.py)) combines
 weighted logits, applies fitted temperature scaling
 ([backend/checkpoints/calibration.json](backend/checkpoints/calibration.json)),
 and abstains ("uncertain") when confidence is low or members disagree —
-honest non-answer beats a confident wrong one.
+honest non-answer beats a confident wrong one. Calibration currently only
+covers the two CNN members (`fit_calibration.py`'s loading loop is CNN-only);
+the CLIP member runs under that same shared temperature as an approximation —
+known gap, flagged in code.
 
 ### Supporting detection tools — 4, non-trained
 
 - **blind_detector.py** — FFT spectral analysis (GAN periodicity), ELA,
   noise/texture heuristics; fallback 3-class signal.
-- **comparative_detector.py** — pHash + dHash distance, ELA diff, for
-  original-vs-suspect pair comparison.
+- **comparative_detector.py** — pHash + dHash distance, plus a
+  **localization ratio** (mean diff inside flagged regions vs. outside) that
+  separates genuine edits from harmless re-compression — SSIM magnitude alone
+  can't (see Honest Status).
 - **fusion.py** — blends CNN ensemble probabilities with heuristic scores
   into the final verdict.
 - **gradcam.py** — Grad-CAM heatmap for explainability (doesn't affect the verdict).
@@ -200,6 +206,31 @@ here so the next person (or session) doesn't have to rediscover them.
    local backup file was kept at promotion time
    (e.g. `efficientnet_b4_fake_pre_v3_backup.pth`) — these backups don't
    survive a fresh clone.
+
+7. **Comparative mode called 4 of 5 unedited images "manipulated."**
+   `is_manipulated` was an OR of three loose thresholds
+   (`score < 0.95 OR any diff region OR phash > 10`), each individually
+   tripped by a plain JPEG re-save. Measured on 250 authentic CASIA images vs.
+   their own re-compressed copies: **81.6% false-alarm rate**, 54.7%
+   precision. Root cause: SSIM *magnitude* does not separate re-compression
+   from editing at all — a genuine copy-move splice measured SSIM 0.955 while
+   a clean q=30 re-save of the *same* unedited image measured 0.933, worse.
+   Fixed by measuring the *spatial structure* of the difference instead — a
+   localization ratio (mean diff inside flagged regions vs. outside).
+   Re-compression spreads error diffusely; editing concentrates it. Validated
+   on 3396 real ground-truth pairs recovered from CASIA's own filenames:
+   recall 98.4%→95.6%, false-alarm 81.6%→**0.0%**, F1 0.703→**0.978**.
+
+8. **CLIP ensemble member's generalization claim is validated same-family
+   only.** The controlled A/B test (`clip_member_ab_test.metrics.json`) uses
+   a held-out Stable Diffusion set — SD1.4 is already in the CNN members'
+   training distribution after fix #4/#1's diffusion work, so this measures a
+   regression check (no harm from adding CLIP, small real gain: 29/30+1
+   abstain → 30/30) more than it measures the actual claim CLIP was added
+   for. Generalization to generator families absent from training entirely
+   (Flux, Midjourney v7, SDXL, Firefly) remains **unverified** — no local
+   access to sample images from those generators. Don't cite the SD1.4 result
+   as evidence of that broader claim; it isn't.
 
 ## Immediate Next Steps
 
