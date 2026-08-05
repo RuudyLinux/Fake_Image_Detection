@@ -29,6 +29,9 @@ from models.cnn_model import build_model, CLASSES
 from training.dataset import FakeImageDataset
 
 
+_CATEGORY_ALIASES = {"indoor67_": "ind", "textocr_": "txt"}
+
+
 def category_of(path: Path) -> str:
     """Same grouping as FakeImageDataset.make_sampler's group_key, plus a
     readable 'face' label for the majority face-crop group."""
@@ -40,6 +43,9 @@ def category_of(path: Path) -> str:
         return f"edited/{name[:4]}"
     if name.startswith("sd14_"):
         return "ai_generated/sd14"
+    for alias_prefix, cat in _CATEGORY_ALIASES.items():
+        if name.startswith(alias_prefix):
+            return f"real/{cat}"  # merged into the same bucket as casia_au_<cat>
     label_dir = path.parent.name
     if label_dir == "real":
         return "real/face"

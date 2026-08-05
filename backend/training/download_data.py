@@ -161,6 +161,92 @@ def _organize_casia(dl_dir: Path, output_dir: Path, max_per_split: int):
     print("  CASIA organized.")
 
 
+# ─── MIT Indoor Scenes — grows the thin `ind` sub-category ───────────────────
+
+def download_indoor67(output_dir: Path, n_train: int = 800, n_val: int = 200):
+    """
+    Kaggle: itsahmad/indoor-scenes-cvpr-2019 (MIT Indoor Scenes / IndoorCVPR09)
+    ~2.5 GB, 67 indoor categories, ~15k images total.
+
+    Populates: real/, prefixed `indoor67_`. dataset.py's group_key merges
+    this into the SAME sampler bucket as `casia_au_*_ind_*` (not a new
+    parallel group) — CASIA's own Au 'ind' split is only 186 images total,
+    the sampler fix (1a677e5) could only oversample what existed, and 186
+    unique images is too thin to fix real/ind's false-EDITED rate without
+    real memorization risk. This is more source images for that same
+    category, not a new category. See PROJECT_SPEC.md Honest Status #4.
+    """
+    print("\nDownloading MIT Indoor Scenes (Kaggle, ~2.5GB)...")
+    dl_dir = output_dir / "_tmp_indoor67"
+    dl_dir.mkdir(parents=True, exist_ok=True)
+
+    result = subprocess.run(
+        ["kaggle", "datasets", "download", "-d", "itsahmad/indoor-scenes-cvpr-2019",
+         "-p", str(dl_dir), "--unzip"],
+        check=False,
+    )
+    if result.returncode != 0:
+        print("\n  Kaggle download failed. Manual steps:")
+        print("  1. Visit https://www.kaggle.com/datasets/itsahmad/indoor-scenes-cvpr-2019")
+        print(f"  2. Download + extract to: {dl_dir}")
+        print("  3. Re-run with --skip-indoor-download")
+        return
+
+    _sample_and_copy(dl_dir, output_dir, "real", "indoor67_", n_train, n_val)
+    shutil.rmtree(dl_dir, ignore_errors=True)
+    print("  Indoor Scenes organized.")
+
+
+# ─── TextOCR — grows the thin `txt` sub-category ──────────────────────────────
+
+def download_textocr(output_dir: Path, n_train: int = 800, n_val: int = 200):
+    """
+    Kaggle: robikscube/textocr-text-extraction-from-images-dataset
+    ~7.2 GB full dataset (whole zip is downloaded; only n_train+n_val images
+    are kept — the rest is deleted after sampling). Real photos containing
+    text in the wild (signs, storefronts, documents), sourced from OpenImages.
+
+    Populates: real/, prefixed `textocr_`. Merges into the SAME sampler
+    bucket as `casia_au_*_txt_*` — CASIA's own Au 'txt' split is only 79
+    images total, the thinnest category and the worst-performing one
+    (0.150 accuracy even after the sampler fix). See PROJECT_SPEC.md
+    Honest Status #4.
+    """
+    print("\nDownloading TextOCR (Kaggle, ~7.2GB — only a subsample is kept)...")
+    dl_dir = output_dir / "_tmp_textocr"
+    dl_dir.mkdir(parents=True, exist_ok=True)
+
+    result = subprocess.run(
+        ["kaggle", "datasets", "download", "-d",
+         "robikscube/textocr-text-extraction-from-images-dataset",
+         "-p", str(dl_dir), "--unzip"],
+        check=False,
+    )
+    if result.returncode != 0:
+        print("\n  Kaggle download failed. Manual steps:")
+        print("  1. Visit https://www.kaggle.com/datasets/robikscube/textocr-text-extraction-from-images-dataset")
+        print(f"  2. Download + extract to: {dl_dir}")
+        print("  3. Re-run with --skip-textocr-download")
+        return
+
+    _sample_and_copy(dl_dir, output_dir, "real", "textocr_", n_train, n_val)
+    shutil.rmtree(dl_dir, ignore_errors=True)
+    print("  TextOCR organized.")
+
+
+def _sample_and_copy(dl_dir: Path, output_dir: Path, dst_class: str, prefix: str,
+                      n_train: int, n_val: int):
+    all_imgs = [f for f in dl_dir.rglob("*") if f.suffix.lower() in EXTENSIONS]
+    random.shuffle(all_imgs)
+    splits = {"train": all_imgs[:n_train], "val": all_imgs[n_train:n_train + n_val]}
+    for split, files in splits.items():
+        dst = output_dir / split / dst_class
+        dst.mkdir(parents=True, exist_ok=True)
+        for f in files:
+            shutil.copy2(f, dst / f"{prefix}{f.name}")
+        print(f"  -> {split}/{dst_class}: {len(files)} {prefix.rstrip('_')} images")
+
+
 def _print_casia_alternatives():
     print("\n  Alternative edited image datasets:")
     print("  • CoMoFoD: https://www.vcl.fer.hr/comofod/")
@@ -208,11 +294,17 @@ def verify(output_dir: Path):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--source",  choices=["140k", "casia", "sd", "all", "verify"], default="all",
-                        help="Data source to download, or 'verify' to just show dataset stats")
+    parser.add_argument("--source",  choices=["140k", "casia", "sd", "indoor", "textocr", "all", "verify"],
+                        default="all",
+                        help="Data source to download, or 'verify' to just show dataset stats. "
+                             "'indoor'/'textocr' are not included in 'all' — they're targeted fixes "
+                             "for the thin real/ind and real/txt sampler buckets, not part of the "
+                             "base pipeline.")
     parser.add_argument("--output",  default="../data")
     parser.add_argument("--max",     type=int, default=10000, help="Max images per class per split")
     parser.add_argument("--sd-n",    type=int, default=3000,  help="SD images to generate")
+    parser.add_argument("--indoor-n",  type=int, default=800, help="Indoor67 train images (val = n/4)")
+    parser.add_argument("--textocr-n", type=int, default=800, help="TextOCR train images (val = n/4)")
     args = parser.parse_args()
 
     output = Path(args.output)
@@ -224,6 +316,10 @@ def main():
         download_casia(output, max_per_split=args.max)
     if args.source == "sd":
         generate_sd_images(output, n=args.sd_n)
+    if args.source == "indoor":
+        download_indoor67(output, n_train=args.indoor_n, n_val=args.indoor_n // 4)
+    if args.source == "textocr":
+        download_textocr(output, n_train=args.textocr_n, n_val=args.textocr_n // 4)
 
     verify(output)
 

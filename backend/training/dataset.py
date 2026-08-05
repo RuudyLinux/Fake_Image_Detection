@@ -185,6 +185,16 @@ class FakeImageDataset(Dataset):
     # at all before this — SUBDOMAIN_PREFIXES only covered real/ai_generated.
     _EDITED_TAMPER_PREFIXES = ("Tp_S_", "Tp_D_", "Sp_S_", "Sp_D_")
 
+    # txt/ind are CASIA Au's entire pool for those categories (79/186 images)
+    # — too thin to fix real/txt and real/ind on their own without heavy
+    # memorization risk. download_data.py's download_indoor67/download_textocr
+    # inject more source images for the SAME categories (prefixed
+    # `indoor67_`/`textocr_`), not new ones. Map them onto the existing
+    # casia_au_ind / casia_au_txt sampler group instead of creating a
+    # parallel group, so the combined pool is what gets balanced against the
+    # rest of `real`. See PROJECT_SPEC.md Honest Status #4.
+    _CATEGORY_ALIASES = {"indoor67_": "ind", "textocr_": "txt"}
+
     def make_sampler(self) -> WeightedRandomSampler:
         """
         Balanced sampler: equal expected frequency per class, AND within each
@@ -205,6 +215,9 @@ class FakeImageDataset(Dataset):
                 return "casia_au_"
             if name.startswith(self._EDITED_TAMPER_PREFIXES):
                 return name[:4]  # "Tp_S" / "Tp_D" / "Sp_S" / "Sp_D"
+            for alias_prefix, cat in self._CATEGORY_ALIASES.items():
+                if name.startswith(alias_prefix):
+                    return f"casia_au_{cat}"
             for prefix in self.SUBDOMAIN_PREFIXES:
                 if name.startswith(prefix):
                     return prefix
