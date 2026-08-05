@@ -172,17 +172,39 @@ class FakeImageDataset(Dataset):
     # seeing faces twice as often and the non-face concept never caught up.
     SUBDOMAIN_PREFIXES = ("casia_au_", "sd14_")
 
+    # One level deeper than SUBDOMAIN_PREFIXES: balancing "casia_au_" as a
+    # single group still starves object categories *inside* it. Measured:
+    # txt=79 / ind=186 vs ani/arc/cha/pla/nat/sec/art=491-588 in train (same
+    # skew in val: txt=20, ind=47 vs 120-150). That gap lines up exactly with
+    # the reported scene/text/indoor false-EDITED rate staying elevated after
+    # the first sampler fix. CASIA "Au" filenames are
+    # "casia_au_Au_<code>_<num>.jpg" — <code> is the object category.
+    #
+    # Same story on the `edited` side: CASIA v2 tamper-type prefixes
+    # (Tp_S/Tp_D/Sp_S/Sp_D) split 2627/1463/375/370 in train, never balanced
+    # at all before this — SUBDOMAIN_PREFIXES only covered real/ai_generated.
+    _EDITED_TAMPER_PREFIXES = ("Tp_S_", "Tp_D_", "Sp_S_", "Sp_D_")
+
     def make_sampler(self) -> WeightedRandomSampler:
         """
         Balanced sampler: equal expected frequency per class, AND within each
-        class, equal expected frequency per data-source sub-domain (see
-        SUBDOMAIN_PREFIXES). Class-only balancing leaves a minority sub-domain
-        proportionally starved even though its class is balanced.
+        class, equal expected frequency per data-source sub-domain / object
+        category / tamper-type (see group_key). Coarser balancing (class-only,
+        or one group for all of "casia_au_") leaves a minority slice
+        proportionally starved even though the level above it looks balanced.
         """
         num_classes = len(CLASS_NAMES)
 
         def group_key(path: Path) -> str:
             name = path.name
+            if name.startswith("casia_au_"):
+                # casia_au_Au_<code>_<num>.jpg -> bucket by <code>
+                parts = name.split("_")
+                if len(parts) >= 4:
+                    return f"casia_au_{parts[3]}"
+                return "casia_au_"
+            if name.startswith(self._EDITED_TAMPER_PREFIXES):
+                return name[:4]  # "Tp_S" / "Tp_D" / "Sp_S" / "Sp_D"
             for prefix in self.SUBDOMAIN_PREFIXES:
                 if name.startswith(prefix):
                     return prefix
