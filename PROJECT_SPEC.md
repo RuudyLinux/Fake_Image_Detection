@@ -232,6 +232,59 @@ here so the next person (or session) doesn't have to rediscover them.
    access to sample images from those generators. Don't cite the SD1.4 result
    as evidence of that broader claim; it isn't.
 
+9. **Unseen-generator accuracy is at or below chance — now measured twice,
+   scripted, not anecdotal.** The 0/30 figure in
+   `generate_diffusion_data.py`'s docstring was real but is no longer
+   reproducible: no checkpoint on disk predates SD1.4 entering training
+   (the `*_pre_v*_backup.pth` files all score 97%+ on `sd14`, so they
+   post-date it). Two fresh leave-one-generator-out runs replaced it:
+
+   | Model | Held-out generator | Zero-shot accuracy |
+   | --- | --- | --- |
+   | EfficientNet-B4 (`--exclude-prefix sd14_`) | SD 1.4 | **42.5%** (85/200; 109/200 confidently REAL) |
+   | Generation Fingerprint v1 (`--exclude-domain defactify_dalle3`) | DALL·E 3 | **40.0%** (150/375) |
+
+   Both skew toward the dangerous direction (false REAL). The B4 run is a
+   *diagnostic artifact, not a promotable checkpoint* — see item 10.
+
+10. **A partial research-data download contaminated a baseline run, and the
+    sampler was blind to it.** ~3,900 `defactify_*` images left on disk by a
+    crashed download were picked up by the next training run: `--exclude-prefix`
+    only knew about `sd14_`, and `make_sampler`'s `group_key` had no case for
+    `defactify_`/`openfake_`, so ~7,500 new AI_GENERATED images landed against
+    1,500 new REAL with no group balancing. Measured damage: **real/face
+    accuracy 25.3%** (1,492/2,000 authentic face photos called AI_GENERATED),
+    real/defactify_coco 32.5%. Fixed in `dataset.py::group_key` and
+    `evaluate_by_category.py::category_of` (both now bucket per generator).
+    The affected checkpoint (`efficientnet_b4_logo_nosd14.pth`) is kept for
+    its LOGO number only and must not be promoted.
+
+11. **The download script itself caused an OOM-class crash.** The first
+    version of `download_research_data.py` buffered every accepted image as
+    a decoded PIL object until the scan finished — 7.8GB RSS, system free RAM
+    to 0.4GB, which killed a concurrent training run mid-epoch (torch shared
+    memory, Windows error 1455 "paging file is too small"). Rewritten around
+    `StreamingBucket`, which writes each image on acceptance: peak memory is
+    now O(1) per bucket instead of O(target).
+
+12. **A reverse id→name lookup fabricated a research result.** Several domain
+    keys deliberately share one integer id (cross-dataset generator merges).
+    `evaluate_fingerprint_logo.py` reversed that map to label its output,
+    silently renaming the held-out `defactify_dalle3` to `openfake_dalle3` —
+    a generator that was never downloaded — so the LOGO filter matched nothing
+    and reported **`logo_accuracy: 0.0`**. Not a real result; the true figure
+    was 40.0%. Fixed at the source: `domain_key` is now a first-class field
+    carried through dataset → collate → eval, never reconstructed.
+
+13. **Provenance layer added as Tier A** (`models/provenance.py`, wired into
+    `blind_detector.analyze`). Two invariants worth restating because
+    violating either is a real vulnerability: absence of provenance never
+    raises confidence (else stripping a manifest *improves* an attacker's
+    score), and a detected manifest is reported `present, unverified` because
+    signature verification is not shipped. A laundering gate rides on the same
+    analysis — verified flipping one test image from `REAL @ 0.919` to
+    `UNCERTAIN` after a q=12 re-save.
+
 ## Immediate Next Steps
 
 1. **EDITED/Tp_S recall has dropped in the same direction across two

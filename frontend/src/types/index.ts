@@ -17,6 +17,29 @@ export interface EnsembleMeta {
   temperature: number;
 }
 
+/**
+ * Provenance / container forensics — the Tier A evidence stream.
+ *
+ * `absence_is_not_evidence` is always true and is carried through from the
+ * backend deliberately: the UI must never present "no manifest found" or
+ * "no camera EXIF" as evidence the image is AI-generated. Most real photos
+ * carry neither — every screenshot and social-media upload strips them.
+ */
+export interface ProvenanceFindings {
+  c2pa_manifest_present: boolean;
+  c2pa_verified: boolean;
+  has_exif: boolean;
+  camera_evidence_strength: 'none' | 'weak' | 'moderate' | 'strong';
+  software_tags: string[];
+  generative_software_hint: string | null;
+  jpeg_quantization_fingerprint: string | null;
+  quantization_notes: string[];
+  thumbnail_mismatch: boolean | null;
+  tier_a_resolved: boolean;
+  reasons: string[];
+  absence_is_not_evidence: boolean;
+}
+
 export interface BlindDetectionResult {
   /** UNCERTAIN when the system declines to commit. */
   prediction: Verdict;
@@ -26,6 +49,15 @@ export interface BlindDetectionResult {
   meets_threshold: boolean;
   abstained: boolean;
   abstain_reasons: string[];
+  /**
+   * Which evidence tier produced this answer — see
+   * PLAN_HIGH_CONFIDENCE_DETECTION.md §3. A_cryptographic is near-certain
+   * (verified signed provenance, no model involved); B_forensic is model +
+   * heuristic consensus; C_uncertain means the system declined to commit.
+   * Optional: responses from an older backend won't carry it.
+   */
+  evidence_tier?: 'A_cryptographic' | 'B_forensic' | 'C_uncertain';
+  provenance?: ProvenanceFindings;
   forgery_type: string;
   heatmap_url: string | null;
   class_probabilities: {

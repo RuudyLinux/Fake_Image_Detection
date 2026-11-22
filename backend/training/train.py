@@ -167,6 +167,13 @@ def main():
                               "actually trying to fix — e.g. a minority category too small to "
                               "move the aggregate metric even when it genuinely improves. "
                               "Lets a later per-category eval pick the right epoch instead.")
+    parser.add_argument("--exclude-prefix", nargs="*", default=(),
+                         help="Filename prefixes to exclude from BOTH train and val (e.g. "
+                              "sd14_) for the leave-one-generator-out (LOGO) protocol — see "
+                              "RESEARCH_PROPOSAL_GENERATION_FINGERPRINT.md §7-8. Checkpoint "
+                              "selection then never sees the held-out generator; run "
+                              "evaluate_by_category.py against the FULL (unfiltered) val set "
+                              "afterward to measure its zero-shot accuracy on what was excluded.")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -181,8 +188,9 @@ def main():
     model = model.to(device)
     print(f"Architecture: {args.arch}  |  input size: {img_size}px")
 
-    train_ds = FakeImageDataset(args.data, split="train", img_size=img_size)
-    val_ds   = FakeImageDataset(args.data, split="val",   img_size=img_size)
+    exclude = tuple(args.exclude_prefix)
+    train_ds = FakeImageDataset(args.data, split="train", img_size=img_size, exclude_prefixes=exclude)
+    val_ds   = FakeImageDataset(args.data, split="val",   img_size=img_size, exclude_prefixes=exclude)
 
     train_loader = DataLoader(
         train_ds, batch_size=args.batch_size,

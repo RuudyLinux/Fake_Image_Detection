@@ -26,6 +26,8 @@ const ABSTAIN_REASONS: Record<string, string> = {
   member_disagreement: 'the models disagreed — the image may be unlike anything in training',
   below_user_threshold: 'confidence fell below the threshold you set',
   heuristics_only: 'no trained model is loaded, so only weak forensic heuristics were available',
+  forensic_evidence_degraded_by_compression:
+    'heavy re-compression destroyed the fine detail this analysis reads — a number here would be guesswork',
 };
 
 const CLASS_CONFIG: Record<Verdict, {
@@ -171,6 +173,55 @@ export default function BlindResultPanel({ result, imageFile, reportOptions }: P
               <p className="mt-2 font-mono text-[11px] text-amber-300">
                 ⚠ Below your confidence threshold — verify manually.
               </p>
+            )}
+
+            {result.provenance && (
+              <div className="mt-3 rounded-xl border border-slate-700/60 bg-slate-900/40 p-3">
+                <p className="label-mono flex items-center gap-1.5">
+                  <ShieldCheck size={11} className="text-cyan-400" />
+                  Provenance &amp; container
+                  {result.evidence_tier && (
+                    <span className="ml-auto font-mono text-[10px] text-slate-500">
+                      tier {result.evidence_tier.charAt(0)}
+                    </span>
+                  )}
+                </p>
+                <ul className="mt-1.5 space-y-1">
+                  <li className="font-mono text-[11px] text-slate-400">
+                    signed manifest (C2PA):{' '}
+                    <span className={result.provenance.c2pa_verified ? 'text-emerald-300' : 'text-slate-500'}>
+                      {result.provenance.c2pa_verified
+                        ? 'verified'
+                        : result.provenance.c2pa_manifest_present
+                          ? 'present, unverified'
+                          : 'none'}
+                    </span>
+                  </li>
+                  <li className="font-mono text-[11px] text-slate-400">
+                    camera capture evidence:{' '}
+                    <span className="text-slate-300">{result.provenance.camera_evidence_strength}</span>
+                  </li>
+                  {result.provenance.generative_software_hint && (
+                    <li className="font-mono text-[11px] text-violet-300">
+                      metadata names a generative tool: {result.provenance.generative_software_hint}
+                    </li>
+                  )}
+                </ul>
+                {/*
+                  Non-negotiable caveat, mirrored from the backend's own
+                  invariant (models/provenance.py): missing provenance is NOT
+                  evidence of AI generation. Most authentic photos have none —
+                  any screenshot or social upload strips it. Showing the
+                  "none" states above without this line would invite exactly
+                  the wrong inference.
+                */}
+                {!result.provenance.c2pa_verified && (
+                  <p className="mt-2 text-[10px] leading-relaxed text-slate-500">
+                    Missing provenance is not evidence of AI generation — most authentic photos
+                    carry none, and any screenshot or re-upload strips it.
+                  </p>
+                )}
+              </div>
             )}
 
             {!result.abstained && result.forgery_type !== 'none' && (

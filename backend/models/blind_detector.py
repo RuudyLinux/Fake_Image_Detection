@@ -19,6 +19,21 @@ Decision pipeline, strongest evidence first:
 
 Prediction classes: REAL | AI_GENERATED | EDITED | UNCERTAIN
 
+Provenance (models/provenance.py) runs first as a separate evidence tier —
+see PLAN_HIGH_CONFIDENCE_DETECTION.md §3. It is the only source of
+near-certain answers, because it reads signed metadata rather than
+classifying pixels. Two rules it imposes on this module:
+
+  * PRESENCE of verified provenance can short-circuit to a near-certain
+    verdict. ABSENCE must never raise confidence — most real photos carry
+    no manifest either, and a screenshot strips it. See that module's
+    docstring for why inverting this would be an exploitable bug.
+
+  * LAUNDERING detected in the container (heavy re-compression, screenshot
+    signatures) means the high-frequency evidence every heuristic below
+    depends on is degraded. That adds an abstention reason rather than
+    letting the model read noise and report a confident number.
+
 If no checkpoint is present the module degrades to heuristics alone, and the
 verdict is marked low-confidence accordingly.
 """
@@ -32,6 +47,7 @@ import cv2
 from pathlib import Path
 
 from models.fusion import fuse
+from models.provenance import analyze_provenance
 
 # ─── load the calibrated ensemble (optional) ───────────────────────────────────
 
@@ -424,6 +440,44 @@ def analyze(
 ) -> dict:
     img = _load_image(image_data)
 
+    # ── Tier A: provenance / container forensics (see module docstring) ──
+    # Runs first and costs almost nothing (parsing, no inference). Cannot
+    # lower confidence on its own — absence of provenance is not evidence.
+    prov = analyze_provenance(image_data)
+    if prov.tier_a_resolved and prov.tier_a_verdict:
+        # Cryptographically resolved: return without running the models at
+        # all. Nothing the classifier could say would outweigh a verified
+        # signature, and pretending otherwise would only add noise to a
+        # certain answer.
+        return {
+            "prediction": prov.tier_a_verdict,
+            "model_prediction": prov.tier_a_verdict,
+            "confidence": round(prov.confidence or 0.999, 3),
+            "meets_threshold": True,
+            "abstained": False,
+            "abstain_reasons": [],
+            "evidence_tier": "A_cryptographic",
+            "forgery_type": None,
+            "heatmap_url": None,
+            "class_probabilities": {prov.tier_a_verdict: prov.confidence or 0.999},
+            "signal_agreement": None,
+            "uncertainty": None,
+            "member_probabilities": None,
+            "ensemble": None,
+            "provenance": prov.to_dict(),
+            "analysis": {},
+        }
+
+    # Laundering gate: if the container shows the image has been through
+    # heavy re-compression, the high-frequency traces every heuristic below
+    # reads have been degraded or destroyed. Flagged here and folded into
+    # the abstention reasons further down, rather than silently producing a
+    # confident number from damaged evidence.
+    laundering_detected = any(
+        "heavily compressed" in note or "degraded" in note
+        for note in prov.quantization_notes
+    )
+
     spectral  = _spectral_score(img)
     gan       = _gan_periodic_score(img)
     noise     = _noise_residual_score(img)
@@ -460,6 +514,11 @@ def analyze(
         abstain_reasons = list(ens["abstain_reasons"])
         if confidence < confidence_threshold:
             abstain_reasons.append("below_user_threshold")
+        if laundering_detected:
+            # Not a model-confidence problem — an evidence-availability one.
+            # The classifier may well be confident; it is confident about
+            # degraded input, which is exactly the case this gate exists for.
+            abstain_reasons.append("forensic_evidence_degraded_by_compression")
 
         abstained = allow_abstain and bool(abstain_reasons)
         prediction = "UNCERTAIN" if abstained else model_prediction
@@ -481,6 +540,8 @@ def analyze(
         abstain_reasons = ["heuristics_only"]
         if confidence < confidence_threshold:
             abstain_reasons.append("below_user_threshold")
+        if laundering_detected:
+            abstain_reasons.append("forensic_evidence_degraded_by_compression")
         abstained = allow_abstain and confidence < confidence_threshold
         prediction = "UNCERTAIN" if abstained else model_prediction
         is_fake = model_prediction != "REAL"
@@ -495,6 +556,10 @@ def analyze(
         "meets_threshold": confidence >= confidence_threshold,
         "abstained": abstained,
         "abstain_reasons": abstain_reasons,
+        # Which evidence tier produced this answer (PLAN_HIGH_CONFIDENCE_DETECTION.md §3).
+        # "B_forensic" = model + heuristic consensus; "C_uncertain" = refused.
+        "evidence_tier": "C_uncertain" if abstained else "B_forensic",
+        "provenance": prov.to_dict(),
         "forgery_type": forgery_type,
         "heatmap_url": heatmap_url,
         "class_probabilities": class_probs,

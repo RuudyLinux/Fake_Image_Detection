@@ -36,8 +36,47 @@ flowchart TB
 
 ## 3. Blind detection pipeline
 
-This is the core of the system — two independent signal sources are fused,
-then gated by an abstention check before anything is returned as a verdict.
+Three evidence tiers, strongest first. Tier A (provenance) is checked before
+any model runs; Tiers B and C are the CNN/heuristic path described below.
+See [PLAN_HIGH_CONFIDENCE_DETECTION.md](PLAN_HIGH_CONFIDENCE_DETECTION.md)
+for why the tiering exists.
+
+### ⓪ Tier A — provenance and container forensics
+
+`models/provenance.py`, run first, costs no inference. Reads signed
+metadata and container structure rather than classifying pixels: C2PA/JUMBF
+manifest detection, EXIF camera-capture evidence, JPEG quantization-table
+fingerprinting, generative-software tags, thumbnail-vs-image mismatch.
+
+Two invariants this tier imposes, both enforced in code:
+
+- **Presence raises certainty; absence never lowers it.** Most authentic
+  photos carry no manifest, and any screenshot or re-upload strips one. If
+  absence were treated as evidence of synthesis, stripping the manifest
+  would *increase* the system's confidence — an exploitable inversion. The
+  finding is returned as `absence_is_not_evidence: true` and mirrored in the
+  frontend caveat text.
+- **Presence ≠ verified.** Full C2PA signature verification needs the c2pa
+  library and a trust list, which this project does not ship. Manifests are
+  reported as `present, unverified`; `c2pa_verified` is never set true today,
+  so Tier A never actually resolves. Deliberate — a fabricated cryptographic
+  guarantee is worse than none.
+
+This tier also sets the **laundering gate**: when quantization analysis shows
+heavy re-compression, the high-frequency evidence every heuristic below
+depends on is degraded, so `forensic_evidence_degraded_by_compression` is
+added to the abstention reasons rather than letting the model report a
+confident number read off destroyed evidence. Verified behaviour: one test
+image returns `REAL @ 0.919` clean, and `UNCERTAIN` after a q=12 re-save.
+
+Every response carries `evidence_tier`: `A_cryptographic` (near-certain,
+no model involved), `B_forensic` (model + heuristic consensus), or
+`C_uncertain` (declined to commit).
+
+### Tiers B/C — the model path
+
+Two independent signal sources are fused, then gated by an abstention check
+before anything is returned as a verdict.
 
 ```mermaid
 flowchart TB
@@ -279,8 +318,15 @@ backend/
   routers/detect.py       /detect/blind, /detect/compare, /history, .../report
   db.py                   SQLite history persistence
   models/
+    provenance.py         Tier A — C2PA/EXIF/quantization container forensics
     ensemble.py           3-model weighted ensemble, calibration, abstention
     clip_detector.py      frozen CLIP vision tower + linear probe (3rd member)
+    fingerprint/          Generation Fingerprint research module (NOT wired
+                          into the live ensemble — see RESEARCH_PROPOSAL_*.md)
+      representations.py  RGB/FFT/DCT/noise/texture/edge extraction
+      encoder.py          small per-representation CNN encoder
+      model.py            fused extractor + GRL + patch-MIL + attribution
+      ood.py              Mahalanobis + energy open-set scoring
     blind_detector.py     orchestrates heuristics + ensemble → verdict
     comparative_detector.py   pHash/dHash + SSIM localization-ratio comparison
     fusion.py              CNN + heuristic probability blending
@@ -294,6 +340,13 @@ backend/
     train_clip_probe.py     extract frozen CLIP features, fit linear probe
     evaluate.py, evaluate_ensemble.py, evaluate_by_category.py,
     robustness_eval.py       metrics tooling
+    evaluate_selective.py    accuracy-vs-coverage curve; coverage @99% precision
+                             (the metric the confidence plan turns on)
+    download_research_data.py  HF pulls (Defactify/OpenFake), generator-tagged
+    fingerprint_dataset.py, train_fingerprint.py,
+    evaluate_fingerprint_logo.py, calibrate_fingerprint.py
+                             Generation Fingerprint training / LOGO / conformal
+    progress_status.py       parses a running job's log into a % complete
     fit_calibration.py       temperature fitting (CNN members only — see §3①)
     download_data.py         Kaggle dataset acquisition + organization
   checkpoints/               *.pth (gitignored) + calibration.json,

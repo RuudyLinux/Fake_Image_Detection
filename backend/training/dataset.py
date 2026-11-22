@@ -123,7 +123,16 @@ def build_transforms(split: str, img_size: int = IMG_SIZE) -> T.Compose:
 
 
 class FakeImageDataset(Dataset):
-    def __init__(self, root: str, split: str = "train", img_size: int = IMG_SIZE):
+    def __init__(self, root: str, split: str = "train", img_size: int = IMG_SIZE,
+                 exclude_prefixes: Tuple[str, ...] = ()):
+        """
+        exclude_prefixes: filename prefixes to drop entirely from this split —
+        used for leave-one-generator-out (LOGO) evaluation protocol
+        (RESEARCH_PROPOSAL_GENERATION_FINGERPRINT.md §7-8): train with a
+        generator's sub-domain excluded (e.g. "sd14_"), then measure zero-shot
+        accuracy on it via a separate, unfiltered evaluate_by_category.py run.
+        Empty by default — does not change any existing training behavior.
+        """
         self.split = split
         self.img_size = img_size
         base = Path(root) / split
@@ -138,6 +147,12 @@ class FakeImageDataset(Dataset):
                 counts[class_name] = 0
                 continue
             imgs = [p for p in class_dir.rglob("*") if p.suffix.lower() in EXTENSIONS]
+            if exclude_prefixes:
+                before = len(imgs)
+                imgs = [p for p in imgs if not p.name.startswith(exclude_prefixes)]
+                if before != len(imgs):
+                    print(f"  [{split}/{class_name}] excluded {before - len(imgs)} images "
+                          f"matching {exclude_prefixes} (LOGO protocol)")
             self.paths.extend([(p, label) for p in imgs])
             counts[class_name] = len(imgs)
 
@@ -171,6 +186,16 @@ class FakeImageDataset(Dataset):
     # accuracy on non-face photos (0 -> 17/40 -> 18/40) — the model kept
     # seeing faces twice as often and the non-face concept never caught up.
     SUBDOMAIN_PREFIXES = ("casia_au_", "sd14_")
+
+    # Generation Fingerprint research data (RESEARCH_PROPOSAL_GENERATION_FINGERPRINT.md
+    # §5) — without per-generator grouping here, defactify_sdxl_/defactify_dalle3_/etc.
+    # all fall into the undifferentiated "base" group alongside face photos, which
+    # measurably broke real/face accuracy (25.3%, from 1492/2000 face photos wrongly
+    # called AI_GENERATED) the first time this data landed in training — the ~7500 new
+    # AI_GENERATED images across 5 generators heavily outweighed the 1500 new REAL
+    # images in raw count, with no group-level balancing to compensate. See git history
+    # for the measured before/after. `_research_group_of` below buckets each generator
+    # (and the real defactify_coco_ pool) as its own group, same granularity as sd14_.
 
     # One level deeper than SUBDOMAIN_PREFIXES: balancing "casia_au_" as a
     # single group still starves object categories *inside* it. Measured:
@@ -218,6 +243,15 @@ class FakeImageDataset(Dataset):
             for alias_prefix, cat in self._CATEGORY_ALIASES.items():
                 if name.startswith(alias_prefix):
                     return f"casia_au_{cat}"
+            if name.startswith("defactify_coco_"):
+                return "defactify_coco"
+            for src_prefix in ("defactify_", "openfake_"):
+                if name.startswith(src_prefix):
+                    # defactify_sdxl_00012.jpg -> "defactify_sdxl" — own group per
+                    # generator, same granularity as sd14_ below, not lumped together.
+                    parts = name.split("_")
+                    gen = parts[1] if len(parts) >= 2 else "unknown"
+                    return f"{src_prefix}{gen}"
             for prefix in self.SUBDOMAIN_PREFIXES:
                 if name.startswith(prefix):
                     return prefix
